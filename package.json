@@ -1,0 +1,42 @@
+{
+  "name": "smartteachagent",
+  "version": "1.0.0",
+  "description": "【新饼】专为班级大屏设计的 Claude Code 套壳版",
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm vite\" \"pnpm electron:dev\"",
+    "vite": "vite",
+    "electron:dev": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "start": "electron .",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PANDAJSR/SmartTeachAgent.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/PANDAJSR/SmartTeachAgent/issues"
+  },
+  "homepage": "https://github.com/PANDAJSR/SmartTeachAgent#readme",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.0.3",
+    "vite": "^8.0.1",
+    "wait-on": "^9.0.4"
+  }
+}
