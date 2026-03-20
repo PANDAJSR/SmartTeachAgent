@@ -77,7 +77,7 @@ function App() {
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <div className="header">
             <Typography.Title level={3} style={{ margin: 0 }}>
-              SmartTeach Agent Demo
+              智教助手
             </Typography.Title>
             <Typography.Text type="secondary">
               前端：Ant Design X ｜ 后端：Claude Agent SDK
