@@ -4,12 +4,12 @@
   "description": "【新饼】专为班级大屏设计的 Claude Code 套壳版",
   "main": "main.js",
   "scripts": {
-    "dev": "concurrently -k \"pnpm vite\" \"pnpm server\" \"pnpm electron:dev\"",
-    "dev:demo": "concurrently -k \"pnpm vite\" \"pnpm server\"",
+    "dev": "concurrently -k \"pnpm run vite\" \"pnpm run server\" \"pnpm run electron:dev\"",
+    "dev:demo": "concurrently -k \"pnpm run vite\" \"pnpm run server\"",
     "server": "node backend/server.mjs",
     "vite": "vite",
-    "electron:dev": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
-    "start": "electron .",
+    "electron:dev": "wait-on tcp:5173 && env -u ELECTRON_RUN_AS_NODE cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "vite build",
     "preview": "vite preview"
   },
