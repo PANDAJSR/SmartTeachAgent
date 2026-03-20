@@ -1,6 +1,12 @@
+type ContentSegment = {
+  type: "text" | "tool";
+  text: string;
+};
+
 type ChatResponse = {
   reply?: string;
   rendered?: string;
+  segments?: ContentSegment[];
   error?: string;
   meta?: unknown;
   trace?: Array<{
@@ -14,6 +20,7 @@ type ChatStreamEvent =
       type: "snapshot";
       reply: string;
       rendered: string;
+      segments: ContentSegment[];
       trace: Array<{
         type: "tool" | "thinking";
         text: string;

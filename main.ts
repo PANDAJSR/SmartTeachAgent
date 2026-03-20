@@ -25,6 +25,7 @@ type ChatProgressSnapshot = {
   reply: string;
   trace: TraceEntry[];
   rendered: string;
+  segments: ContentSegment[];
 };
 
 type ChatResult = {
@@ -32,6 +33,7 @@ type ChatResult = {
   meta: ChatMeta | null;
   trace: TraceEntry[];
   rendered: string;
+  segments: ContentSegment[];
   stopped?: boolean;
 };
 
@@ -147,6 +149,7 @@ async function runClaudeChat(
       reply: streamedReply,
       trace: trace.map((item) => ({ ...item })),
       rendered,
+      segments: segments.map((item) => ({ ...item })),
     });
   };
 
@@ -289,6 +292,7 @@ async function runClaudeChat(
         meta: resultMeta,
         trace,
         rendered: buildRenderedContent(segments, streamedReply),
+        segments,
         stopped: true,
       };
     }
@@ -304,6 +308,7 @@ async function runClaudeChat(
     meta: resultMeta,
     trace,
     rendered: buildRenderedContent(segments, finalResult || streamedReply),
+    segments,
   };
 }
 

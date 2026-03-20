@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Bubble, Conversations, Sender } from "@ant-design/x";
+import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
 
@@ -14,6 +14,7 @@ type ChatItem = {
   extraInfo?: {
     streaming?: boolean;
     trace?: TraceEntry[];
+    segments?: ContentSegment[];
   };
 };
 
@@ -22,9 +23,15 @@ type TraceEntry = {
   text: string;
 };
 
+type ContentSegment = {
+  type: "text" | "tool";
+  text: string;
+};
+
 type ChatResponse = {
   reply?: string;
   rendered?: string;
+  segments?: ContentSegment[];
   error?: string;
   trace?: TraceEntry[];
 };
@@ -34,6 +41,7 @@ type StreamEvent =
       type: "snapshot";
       reply: string;
       rendered: string;
+      segments: ContentSegment[];
       trace: TraceEntry[];
     }
   | {
@@ -88,6 +96,18 @@ const buildAiContent = (reply: string, streaming = false): string => {
   return streaming ? "思考中..." : "（无文本回复）";
 };
 
+const renderToolText = (text: string) => {
+  const marker = "，参数：";
+  const index = text.indexOf(marker);
+  if (index === -1) {
+    return <XMarkdown content={text} />;
+  }
+  const title = text.slice(0, index).trim();
+  const payload = text.slice(index + marker.length).trim();
+  const formatted = `${title}\n\n\`\`\`json\n${payload}\n\`\`\``;
+  return <XMarkdown content={formatted} />;
+};
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -102,12 +122,45 @@ function App() {
         ai: {
           placement: "start",
           variant: "borderless",
-          contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) => (
-            <XMarkdown
-              content={content}
-              streaming={{ hasNextChunk: Boolean(info?.extraInfo?.streaming) }}
-            />
-          ),
+          contentRender: (
+            content: string,
+            info: { extraInfo?: { streaming?: boolean; segments?: ContentSegment[] } }
+          ) => {
+            const segments = info?.extraInfo?.segments;
+            if (Array.isArray(segments) && segments.length > 0) {
+              return (
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  {segments.map((segment, index) =>
+                    segment.type === "tool" ? (
+                      <Think
+                        key={`segment-tool-${index}`}
+                        title="工具调用"
+                        defaultExpanded
+                        styles={{ content: { marginTop: 8 } }}
+                      >
+                        {renderToolText(segment.text)}
+                      </Think>
+                    ) : (
+                      <XMarkdown
+                        key={`segment-text-${index}`}
+                        content={segment.text}
+                        streaming={{
+                          hasNextChunk:
+                            Boolean(info?.extraInfo?.streaming) && index === segments.length - 1,
+                        }}
+                      />
+                    )
+                  )}
+                </Space>
+              );
+            }
+            return (
+              <XMarkdown
+                content={content}
+                streaming={{ hasNextChunk: Boolean(info?.extraInfo?.streaming) }}
+              />
+            );
+          },
           footer: () => null,
         },
         user: { placement: "end", variant: "filled" },
@@ -173,7 +226,7 @@ function App() {
               content: "思考中...",
               streaming: true,
               status: "loading",
-              extraInfo: { streaming: true, trace: [] },
+              extraInfo: { streaming: true, trace: [], segments: [] },
             },
           ],
         };
@@ -226,7 +279,11 @@ function App() {
                             streaming: true,
                             content: buildAiContent(event.rendered || event.reply || "", true),
                             status: "loading",
-                            extraInfo: { streaming: true, trace: event.trace || [] },
+                            extraInfo: {
+                              streaming: true,
+                              trace: event.trace || [],
+                              segments: event.segments || [],
+                            },
                           }
                         : item
                     ),
@@ -276,7 +333,11 @@ function App() {
                         streaming: false,
                         content: buildAiContent(data.rendered || data.reply || "", false),
                         status: "success",
-                        extraInfo: { streaming: false, trace: data.trace || [] },
+                        extraInfo: {
+                          streaming: false,
+                          trace: data.trace || [],
+                          segments: data.segments || [],
+                        },
                       }
                     : item
                 ),

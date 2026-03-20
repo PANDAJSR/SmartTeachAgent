@@ -5,10 +5,16 @@ type TraceEntry = {
   text: string;
 };
 
+type ContentSegment = {
+  type: "text" | "tool";
+  text: string;
+};
+
 type StreamEvent = {
   type: "snapshot";
   reply: string;
   rendered: string;
+  segments: ContentSegment[];
   trace: TraceEntry[];
 } | {
   type: "done";

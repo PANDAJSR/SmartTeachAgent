@@ -248,6 +248,7 @@ app.post(
       return res.json({
         reply: finalResult,
         rendered: buildRenderedContent(segments, finalResult),
+        segments,
         meta: resultMeta,
         trace,
       });
