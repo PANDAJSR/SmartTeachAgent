@@ -5,5 +5,3 @@
 1. 使用中文编写清晰的 commit message。
 2. 完成 commit。
 3. 及时 push 到远程仓库对应分支。
-
-请勿使用英文或无意义的提交信息（如：`update`、`fix`）。
