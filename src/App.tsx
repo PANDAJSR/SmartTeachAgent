@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Bubble, Sender } from "@ant-design/x";
+import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
 
 type Role = "user" | "ai";
@@ -22,7 +23,11 @@ function App() {
 
   const roles = useMemo(
     () => ({
-      ai: { placement: "start", variant: "borderless" },
+      ai: {
+        placement: "start",
+        variant: "borderless",
+        contentRender: (content: string) => <XMarkdown>{content}</XMarkdown>,
+      },
       user: { placement: "end", variant: "filled" },
     } as const),
     []
