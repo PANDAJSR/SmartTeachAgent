@@ -112,39 +112,21 @@ function App() {
             info?.extraInfo?.streaming ? content : <XMarkdown content={content} />,
           footer: (_content: string, info: { extraInfo?: { streaming?: boolean; trace?: TraceEntry[] } }) => {
             const trace = info?.extraInfo?.trace || [];
-            const streaming = Boolean(info?.extraInfo?.streaming);
-            const thinkingSteps = trace.filter((item) => item.type === "thinking").map((item) => item.text);
             const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
 
-            if (!streaming && thinkingSteps.length === 0 && toolSteps.length === 0) {
+            if (toolSteps.length === 0) {
               return null;
             }
 
             return (
               <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Think title={streaming ? "思考中" : "思考过程"} loading={streaming} defaultExpanded={false}>
-                  {thinkingSteps.length > 0 ? (
-                    <ol style={{ margin: 0, paddingLeft: 18 }}>
-                      {thinkingSteps.map((step, idx) => (
-                        <li key={`thinking-${idx}`}>{step}</li>
-                      ))}
-                    </ol>
-                  ) : streaming ? (
-                    <Typography.Text type="secondary">等待模型返回 thinking block...</Typography.Text>
-                  ) : (
-                    <Typography.Text type="secondary">本次模型未返回 thinking block。</Typography.Text>
-                  )}
+                <Think title="工具调用过程" defaultExpanded={false}>
+                  <ol style={{ margin: 0, paddingLeft: 18 }}>
+                    {toolSteps.map((step, idx) => (
+                      <li key={`tool-${idx}`}>{step}</li>
+                    ))}
+                  </ol>
                 </Think>
-
-                {toolSteps.length > 0 ? (
-                  <Think title="工具调用过程" defaultExpanded={false}>
-                    <ol style={{ margin: 0, paddingLeft: 18 }}>
-                      {toolSteps.map((step, idx) => (
-                        <li key={`tool-${idx}`}>{step}</li>
-                      ))}
-                    </ol>
-                  </Think>
-                ) : null}
               </Space>
             );
           },
