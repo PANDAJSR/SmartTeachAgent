@@ -29,6 +29,7 @@ type ToolSegment = {
   toolName?: string;
   toolUseId?: string;
   status?: ToolStatus;
+  output?: string;
 };
 
 type ContentSegment = TextSegment | ToolSegment;
@@ -170,7 +171,10 @@ function buildRenderedContent(segments: ContentSegment[], fallbackReply: string)
   const blocks: string[] = [];
   for (const segment of segments) {
     if (segment.type === "tool") {
-      blocks.push(`> [工具调用] ${segment.text}`);
+      const toolBlock = segment.output
+        ? `${segment.text}\n\n工具输出：\n${segment.output}`
+        : segment.text;
+      blocks.push(`> [工具调用] ${toolBlock}`);
       continue;
     }
     if (!segment.text) {
@@ -183,6 +187,83 @@ function buildRenderedContent(segments: ContentSegment[], fallbackReply: string)
     return rendered;
   }
   return fallbackReply.trim();
+}
+
+function extractToolOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => extractToolOutput(item))
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return parts.join("\n");
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.text === "string") {
+      return obj.text.trim();
+    }
+    if (typeof obj.stdout === "string" || typeof obj.stderr === "string") {
+      return [obj.stdout, obj.stderr].filter((item): item is string => typeof item === "string").join("\n").trim();
+    }
+    if ("content" in obj) {
+      return extractToolOutput(obj.content);
+    }
+  }
+  return toPreview(value);
+}
+
+function appendToolOutput(
+  segments: ContentSegment[],
+  payload: {
+    output: string;
+    toolUseId?: string;
+    toolName?: string;
+    status?: ToolStatus;
+  }
+): void {
+  const clean = payload.output.trim();
+  if (!clean) {
+    return;
+  }
+  const idx = findLatestToolSegmentIndex(segments, payload.toolUseId, payload.toolName);
+  if (idx >= 0) {
+    const prev = segments[idx];
+    if (prev.type !== "tool") {
+      return;
+    }
+    segments[idx] = {
+      ...prev,
+      output: prev.output ? `${prev.output}\n${clean}` : clean,
+      status: payload.status || prev.status,
+    };
+    return;
+  }
+  segments.push({
+    type: "tool",
+    text: payload.toolName ? `工具 ${payload.toolName}` : "工具执行",
+    toolName: payload.toolName,
+    toolUseId: payload.toolUseId,
+    status: payload.status,
+    output: clean,
+  });
+}
+
+function finalizeToolStatuses(segments: ContentSegment[]): void {
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment.type !== "tool") {
+      continue;
+    }
+    if (!segment.status || segment.status === "pending" || segment.status === "running") {
+      segments[index] = {
+        ...segment,
+        status: "completed",
+      };
+    }
+  }
 }
 
 async function runClaudeChat(
@@ -295,6 +376,19 @@ async function runClaudeChat(
       continue;
     }
 
+    if (sdkMessage.type === "user") {
+      const outputText = extractToolOutput(sdkMessage.tool_use_result);
+      if (outputText) {
+        appendToolOutput(segments, {
+          output: outputText,
+          toolUseId: sdkMessage.parent_tool_use_id || undefined,
+          status: "completed",
+        });
+        emitProgress();
+      }
+      continue;
+    }
+
     if (sdkMessage.type === "system") {
       if (sdkMessage.subtype === "task_started") {
         const text = `任务开始：${sdkMessage.description}`;
@@ -370,6 +464,7 @@ async function runClaudeChat(
     if (sdkMessage.subtype === "success") {
       finalResult = sdkMessage.result;
       streamedReply = finalResult;
+      finalizeToolStatuses(segments);
       if (!segments.some((segment) => segment.type === "text" && segment.text.trim())) {
         appendTextSegment(segments, finalResult);
       }
@@ -387,6 +482,7 @@ async function runClaudeChat(
   }
   } catch (error) {
     if (abortController?.signal.aborted) {
+      finalizeToolStatuses(segments);
       return {
         reply: streamedReply,
         meta: resultMeta,
