@@ -91,7 +91,7 @@ function App() {
           <Sender
             value={input}
             loading={loading}
-            placeholder="输入你的教学场景问题，回车发送"
+            placeholder="输入你的问题，回车发送"
             onChange={setInput}
             onSubmit={sendMessage}
             submitType="enter"
