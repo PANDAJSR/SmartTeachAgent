@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Bubble, Sender } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Card, Space, Typography } from "antd";
+import { Button, Card, Space, Typography } from "antd";
 
 type Role = "user" | "ai";
 
@@ -16,37 +16,98 @@ type ChatResponse = {
   error?: string;
 };
 
+type Conversation = {
+  id: string;
+  title: string;
+  items: ChatItem[];
+  createdAt: number;
+};
+
+const createConversation = (index: number): Conversation => {
+  const now = Date.now();
+  return {
+    id: `conversation-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    title: `新对话 ${index}`,
+    items: [],
+    createdAt: now,
+  };
+};
+
+const buildTitleFromInput = (text: string): string => {
+  const clean = text.trim().replace(/\s+/g, " ");
+  if (!clean) {
+    return "";
+  }
+  return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
+};
+
 function App() {
+  const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
-  const [items, setItems] = useState<ChatItem[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([initialConversation]);
+  const [activeConversationId, setActiveConversationId] = useState<string>(initialConversation.id);
 
   const roles = useMemo(
-    () => ({
-      ai: {
-        placement: "start",
-        variant: "borderless",
-        contentRender: (content: string) => <XMarkdown content={content} />,
-      },
-      user: { placement: "end", variant: "filled" },
-    } as const),
+    () =>
+      ({
+        ai: {
+          placement: "start",
+          variant: "borderless",
+          contentRender: (content: string) => <XMarkdown content={content} />,
+        },
+        user: { placement: "end", variant: "filled" },
+      } as const),
     []
   );
 
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId),
+    [conversations, activeConversationId]
+  );
+
+  const activeItems = activeConversation?.items ?? [];
+
+  const createNewConversation = (): void => {
+    if (loading) {
+      return;
+    }
+    const newConversation = createConversation(conversations.length + 1);
+    setConversations((prev) => [...prev, newConversation]);
+    setActiveConversationId(newConversation.id);
+    setInput("");
+  };
+
   const sendMessage = async (text: string): Promise<void> => {
     const clean = text.trim();
-    if (!clean || loading) {
+    if (!clean || loading || !activeConversationId) {
       return;
     }
 
+    const currentConversationId = activeConversationId;
     const userKey = `user-${Date.now()}`;
-    const aiKey = `ai-${Date.now()}`;
+    const aiKey = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-    setItems((prev) => [
-      ...prev,
-      { key: userKey, role: "user", content: clean },
-      { key: aiKey, role: "ai", content: "思考中..." },
-    ]);
+    setConversations((prev) =>
+      prev.map((conversation) => {
+        if (conversation.id !== currentConversationId) {
+          return conversation;
+        }
+        const nextTitle =
+          conversation.items.length === 0 && conversation.title.startsWith("新对话")
+            ? buildTitleFromInput(clean) || conversation.title
+            : conversation.title;
+        return {
+          ...conversation,
+          title: nextTitle,
+          items: [
+            ...conversation.items,
+            { key: userKey, role: "user", content: clean },
+            { key: aiKey, role: "ai", content: "思考中..." },
+          ],
+        };
+      })
+    );
     setInput("");
     setLoading(true);
 
@@ -72,21 +133,37 @@ function App() {
         throw new Error(data.error);
       }
 
-      setItems((prev) =>
-        prev.map((item) => (item.key === aiKey ? { ...item, content: data.reply || "" } : item))
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === currentConversationId
+            ? {
+                ...conversation,
+                items: conversation.items.map((item) =>
+                  item.key === aiKey ? { ...item, content: data.reply || "" } : item
+                ),
+              }
+            : conversation
+        )
       );
     } catch (error) {
-      setItems((prev) =>
-        prev.map((item) =>
-          item.key === aiKey
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === currentConversationId
             ? {
-                ...item,
-                content:
-                  error instanceof Error
-                    ? `调用失败：${error.message}`
-                    : "调用失败：未知错误",
+                ...conversation,
+                items: conversation.items.map((item) =>
+                  item.key === aiKey
+                    ? {
+                        ...item,
+                        content:
+                          error instanceof Error
+                            ? `调用失败：${error.message}`
+                            : "调用失败：未知错误",
+                      }
+                    : item
+                ),
               }
-            : item
+            : conversation
         )
       );
     } finally {
@@ -97,30 +174,74 @@ function App() {
   return (
     <main className="page">
       <Card className="chat-card" variant="borderless">
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <div className="header">
-            <Typography.Title level={3} style={{ margin: 0 }}>
-              智教助手
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              前端：Ant Design X ｜ 后端：Claude Agent SDK
-            </Typography.Text>
-          </div>
+        <div className="app-layout">
+          <aside className="conversation-panel">
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <div className="conversation-panel-header">
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  对话列表
+                </Typography.Title>
+                <Button type="primary" onClick={createNewConversation} disabled={loading}>
+                  新建对话
+                </Button>
+              </div>
+              <div className="conversation-list">
+                {conversations.map((conversation) => (
+                  <button
+                    type="button"
+                    key={conversation.id}
+                    className={`conversation-item ${
+                      conversation.id === activeConversationId ? "active" : ""
+                    }`}
+                    onClick={() => setActiveConversationId(conversation.id)}
+                  >
+                    <span className="conversation-item-title">{conversation.title}</span>
+                    <span className="conversation-item-time">
+                      {new Date(conversation.createdAt).toLocaleString("zh-CN", {
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </Space>
+          </aside>
 
-          <div className="chat-window">
-            <Bubble.List items={items} role={roles} autoScroll />
-          </div>
+          <section className="chat-panel">
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <div className="header">
+                <Typography.Title level={3} style={{ margin: 0 }}>
+                  智教助手
+                </Typography.Title>
+                <Typography.Text type="secondary">
+                  前端：Ant Design X ｜ 后端：Claude Agent SDK
+                </Typography.Text>
+              </div>
 
-          <Sender
-            value={input}
-            loading={loading}
-            placeholder="输入你的问题，回车发送"
-            onChange={setInput}
-            onSubmit={sendMessage}
-            submitType="enter"
-            autoSize={{ minRows: 2, maxRows: 6 }}
-          />
-        </Space>
+              <div className="chat-window">
+                {activeItems.length > 0 ? (
+                  <Bubble.List items={activeItems} role={roles} autoScroll />
+                ) : (
+                  <div className="empty-tip">开始一个新对话，问点什么吧。</div>
+                )}
+              </div>
+
+              <Sender
+                value={input}
+                loading={loading}
+                placeholder="输入你的问题，回车发送"
+                onChange={setInput}
+                onSubmit={sendMessage}
+                submitType="enter"
+                autoSize={{ minRows: 2, maxRows: 6 }}
+                disabled={!activeConversation}
+              />
+            </Space>
+          </section>
+        </div>
       </Card>
     </main>
   );
