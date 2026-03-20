@@ -12,6 +12,8 @@ type StreamEvent = {
 } | {
   type: "done";
 } | {
+  type: "stopped";
+} | {
   type: "error";
   error: string;
 };
@@ -20,8 +22,11 @@ contextBridge.exposeInMainWorld("smartTeach", {
   chat: async (message: string) => {
     return ipcRenderer.invoke("chat:send", { message });
   },
-  chatStream: async (message: string, onEvent: (event: StreamEvent) => void) => {
-    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  chatStream: async (
+    message: string,
+    requestId: string,
+    onEvent: (event: StreamEvent) => void
+  ) => {
     const channel = `chat:stream:${requestId}`;
     const listener = (_event: unknown, payload: StreamEvent) => {
       onEvent(payload);
@@ -33,5 +38,8 @@ contextBridge.exposeInMainWorld("smartTeach", {
     } finally {
       ipcRenderer.removeListener(channel, listener);
     }
+  },
+  stopChat: async (requestId: string) => {
+    return ipcRenderer.invoke("chat:stop", { requestId });
   },
 });

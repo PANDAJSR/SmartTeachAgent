@@ -21,6 +21,9 @@ type ChatStreamEvent =
       type: "done";
     }
   | {
+      type: "stopped";
+    }
+  | {
       type: "error";
       error: string;
     };
@@ -31,8 +34,10 @@ declare global {
       chat: (message: string) => Promise<ChatResponse>;
       chatStream?: (
         message: string,
+        requestId: string,
         onEvent: (event: ChatStreamEvent) => void
       ) => Promise<ChatResponse>;
+      stopChat?: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
     };
   }
 }

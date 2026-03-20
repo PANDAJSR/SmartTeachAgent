@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Bubble, Conversations, Sender } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
@@ -9,6 +9,10 @@ type ChatItem = {
   key: string;
   role: Role;
   content: string;
+  status?: "loading" | "success" | "error" | "abort";
+  extraInfo?: {
+    streaming?: boolean;
+  };
 };
 
 type TraceEntry = {
@@ -30,6 +34,9 @@ type StreamEvent =
     }
   | {
       type: "done";
+    }
+  | {
+      type: "stopped";
     }
   | {
       type: "error";
@@ -100,6 +107,7 @@ function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [conversations, setConversations] = useState<Conversation[]>([initialConversation]);
   const [activeConversationId, setActiveConversationId] = useState<string>(initialConversation.id);
+  const activeRequestIdRef = useRef<string | null>(null);
 
   const roles = useMemo(
     () =>
@@ -107,7 +115,17 @@ function App() {
         ai: {
           placement: "start",
           variant: "borderless",
-          contentRender: (content: string) => <XMarkdown content={content} />,
+          typing: (_content: string, info: { extraInfo?: { streaming?: boolean } }) =>
+            info?.extraInfo?.streaming
+              ? {
+                  effect: "typing" as const,
+                  step: [2, 5] as [number, number],
+                  interval: 30,
+                  keepPrefix: true,
+                }
+              : false,
+          contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) =>
+            info?.extraInfo?.streaming ? content : <XMarkdown content={content} />,
         },
         user: { placement: "end", variant: "filled" },
       } as const),
@@ -148,6 +166,8 @@ function App() {
     const currentConversationId = activeConversationId;
     const userKey = `user-${Date.now()}`;
     const aiKey = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    activeRequestIdRef.current = requestId;
 
     setConversations((prev) =>
       prev.map((conversation) => {
@@ -164,7 +184,13 @@ function App() {
           items: [
             ...conversation.items,
             { key: userKey, role: "user", content: clean },
-            { key: aiKey, role: "ai", content: "思考中..." },
+            {
+              key: aiKey,
+              role: "ai",
+              content: "思考中...",
+              status: "loading",
+              extraInfo: { streaming: true },
+            },
           ],
         };
       })
@@ -175,7 +201,31 @@ function App() {
     try {
       let data: ChatResponse | undefined;
       if (window.smartTeach?.chatStream) {
-        data = await window.smartTeach.chatStream(clean, (event: StreamEvent) => {
+        let stopped = false;
+        data = await window.smartTeach.chatStream(clean, requestId, (event: StreamEvent) => {
+          if (event.type === "stopped") {
+            stopped = true;
+            setConversations((prev) =>
+              prev.map((conversation) =>
+                conversation.id === currentConversationId
+                  ? {
+                      ...conversation,
+                      items: conversation.items.map((item) =>
+                        item.key === aiKey
+                          ? {
+                              ...item,
+                              status: "abort",
+                              extraInfo: { streaming: false },
+                              content: `${item.content}\n\n（已停止）`,
+                            }
+                          : item
+                      ),
+                    }
+                  : conversation
+              )
+            );
+            return;
+          }
           if (event.type !== "snapshot") {
             return;
           }
@@ -189,6 +239,8 @@ function App() {
                         ? {
                             ...item,
                             content: buildAiContent(event.reply || "", event.trace, true),
+                            status: "loading",
+                            extraInfo: { streaming: true },
                           }
                         : item
                     ),
@@ -197,6 +249,11 @@ function App() {
             )
           );
         });
+        if (stopped) {
+          setLoading(false);
+          activeRequestIdRef.current = null;
+          return;
+        }
       } else if (window.smartTeach?.chat) {
         data = await window.smartTeach.chat(clean);
       } else {
@@ -228,7 +285,12 @@ function App() {
                 ...conversation,
                 items: conversation.items.map((item) =>
                   item.key === aiKey
-                    ? { ...item, content: buildAiContent(data.reply || "", data.trace) }
+                    ? {
+                        ...item,
+                        content: buildAiContent(data.reply || "", data.trace),
+                        status: "success",
+                        extraInfo: { streaming: false },
+                      }
                     : item
                 ),
               }
@@ -249,6 +311,8 @@ function App() {
                           error instanceof Error
                             ? `调用失败：${error.message}`
                             : "调用失败：未知错误",
+                        status: "error",
+                        extraInfo: { streaming: false },
                       }
                     : item
                 ),
@@ -258,6 +322,19 @@ function App() {
       );
     } finally {
       setLoading(false);
+      activeRequestIdRef.current = null;
+    }
+  };
+
+  const handleCancel = async (): Promise<void> => {
+    const requestId = activeRequestIdRef.current;
+    if (!requestId || !window.smartTeach?.stopChat) {
+      return;
+    }
+    try {
+      await window.smartTeach.stopChat(requestId);
+    } catch {
+      // ignore stop errors
     }
   };
 
@@ -309,6 +386,7 @@ function App() {
                 placeholder="输入你的问题，回车发送"
                 onChange={setInput}
                 onSubmit={sendMessage}
+                onCancel={handleCancel}
                 submitType="enter"
                 autoSize={{ minRows: 2, maxRows: 6 }}
                 disabled={!activeConversation}

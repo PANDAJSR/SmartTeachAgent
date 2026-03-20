@@ -25,7 +25,10 @@ type ChatResult = {
   reply: string;
   meta: ChatMeta | null;
   trace: TraceEntry[];
+  stopped?: boolean;
 };
+
+const activeAbortControllers = new Map<string, AbortController>();
 
 function toPreview(value: unknown): string {
   try {
@@ -65,7 +68,8 @@ function appendTrace(trace: TraceEntry[], type: TraceEntry["type"], delta: strin
 
 async function runClaudeChat(
   message?: string,
-  onProgress?: (snapshot: ChatProgressSnapshot) => void
+  onProgress?: (snapshot: ChatProgressSnapshot) => void,
+  abortController?: AbortController
 ): Promise<ChatResult> {
   const clean = (message || "").trim();
   if (!clean) {
@@ -80,7 +84,7 @@ async function runClaudeChat(
 
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
-  const trace: TraceEntry[] = [];
+  const trace: TraceEntry[] = [{ type: "thinking", text: "正在分析你的问题..." }];
   let streamedReply = "";
 
   const emitProgress = (): void => {
@@ -95,8 +99,12 @@ async function runClaudeChat(
 
   const options = buildClaudeOptions();
   options.includePartialMessages = true;
+  options.agentProgressSummaries = true;
+  options.abortController = abortController;
+  emitProgress();
 
-  for await (const sdkMessage of query({ prompt: clean, options })) {
+  try {
+    for await (const sdkMessage of query({ prompt: clean, options })) {
     if (sdkMessage.type === "assistant") {
       const blocks = sdkMessage.message?.content;
       if (Array.isArray(blocks)) {
@@ -212,13 +220,24 @@ async function runClaudeChat(
       throw new Error(detail);
     }
   }
+  } catch (error) {
+    if (abortController?.signal.aborted) {
+      return {
+        reply: streamedReply,
+        meta: resultMeta,
+        trace,
+        stopped: true,
+      };
+    }
+    throw error;
+  }
 
-  if (!finalResult) {
+  if (!finalResult && !streamedReply) {
     throw new Error("未获取到 Claude 返回内容");
   }
 
   return {
-    reply: finalResult,
+    reply: finalResult || streamedReply,
     meta: resultMeta,
     trace,
   };
@@ -254,10 +273,13 @@ ipcMain.handle(
       }
     };
 
+    const abortController = new AbortController();
+    activeAbortControllers.set(requestId, abortController);
+
     try {
-      const result = await runClaudeChat(payload?.message, sendSnapshot);
+      const result = await runClaudeChat(payload?.message, sendSnapshot, abortController);
       if (!event.sender.isDestroyed()) {
-        event.sender.send(channel, { type: "done" });
+        event.sender.send(channel, { type: result.stopped ? "stopped" : "done" });
       }
       return result;
     } catch (error) {
@@ -266,9 +288,24 @@ ipcMain.handle(
         event.sender.send(channel, { type: "error", error: message });
       }
       return { error: message };
+    } finally {
+      activeAbortControllers.delete(requestId);
     }
   }
 );
+
+ipcMain.handle("chat:stop", async (_event, payload?: { requestId?: string }) => {
+  const requestId = (payload?.requestId || "").trim();
+  if (!requestId) {
+    return { ok: false, error: "缺少 requestId" };
+  }
+  const controller = activeAbortControllers.get(requestId);
+  if (!controller) {
+    return { ok: false, error: "未找到可中断的请求" };
+  }
+  controller.abort();
+  return { ok: true };
+});
 
 function createWindow(): void {
   const win = new BrowserWindow({
