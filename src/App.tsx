@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Bubble, Conversations, Sender } from "@ant-design/x";
+import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
 
@@ -12,6 +12,7 @@ type ChatItem = {
   status?: "loading" | "success" | "error" | "abort";
   extraInfo?: {
     streaming?: boolean;
+    trace?: TraceEntry[];
   };
 };
 
@@ -76,29 +77,12 @@ const formatConversationTime = (timestamp: number): string =>
     minute: "2-digit",
   });
 
-const toMarkdownList = (items: string[]): string => items.map((item, idx) => `${idx + 1}. ${item}`).join("\n");
-
-const buildAiContent = (reply: string, trace?: TraceEntry[], streaming = false): string => {
-  const hasReply = reply.trim().length > 0;
-  const hasTrace = Boolean(trace && trace.length > 0);
-  const sections: string[] = [hasReply ? reply.trim() : streaming || hasTrace ? "思考中..." : "（无文本回复）"];
-
-  if (trace && trace.length > 0) {
-    const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
-    const thinkingSteps = trace.filter((item) => item.type === "thinking").map((item) => item.text);
-
-    if (toolSteps.length > 0) {
-      sections.push("### 工具调用过程");
-      sections.push(toMarkdownList(toolSteps));
-    }
-
-    if (thinkingSteps.length > 0) {
-      sections.push("### 思考过程（摘要）");
-      sections.push(toMarkdownList(thinkingSteps));
-    }
+const buildAiContent = (reply: string, streaming = false): string => {
+  const text = reply.trim();
+  if (text) {
+    return text;
   }
-
-  return sections.join("\n\n");
+  return streaming ? "思考中..." : "（无文本回复）";
 };
 
 function App() {
@@ -126,6 +110,46 @@ function App() {
               : false,
           contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) =>
             info?.extraInfo?.streaming ? content : <XMarkdown content={content} />,
+          footer: (_content: string, info: { extraInfo?: { streaming?: boolean; trace?: TraceEntry[] } }) => {
+            const trace = info?.extraInfo?.trace || [];
+            const streaming = Boolean(info?.extraInfo?.streaming);
+            const thinkingSteps = trace.filter((item) => item.type === "thinking").map((item) => item.text);
+            const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
+
+            if (!streaming && thinkingSteps.length === 0 && toolSteps.length === 0) {
+              return null;
+            }
+
+            return (
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <Think
+                  title={streaming ? "思考中" : "思考过程"}
+                  loading={streaming && thinkingSteps.length === 0}
+                  defaultExpanded={false}
+                >
+                  {thinkingSteps.length > 0 ? (
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {thinkingSteps.map((step, idx) => (
+                        <li key={`thinking-${idx}`}>{step}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <Typography.Text type="secondary">正在整理思路...</Typography.Text>
+                  )}
+                </Think>
+
+                {toolSteps.length > 0 ? (
+                  <Think title="工具调用过程" defaultExpanded={false}>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {toolSteps.map((step, idx) => (
+                        <li key={`tool-${idx}`}>{step}</li>
+                      ))}
+                    </ol>
+                  </Think>
+                ) : null}
+              </Space>
+            );
+          },
         },
         user: { placement: "end", variant: "filled" },
       } as const),
@@ -189,7 +213,7 @@ function App() {
               role: "ai",
               content: "思考中...",
               status: "loading",
-              extraInfo: { streaming: true },
+              extraInfo: { streaming: true, trace: [] },
             },
           ],
         };
@@ -238,9 +262,9 @@ function App() {
                       item.key === aiKey
                         ? {
                             ...item,
-                            content: buildAiContent(event.reply || "", event.trace, true),
+                            content: buildAiContent(event.reply || "", true),
                             status: "loading",
-                            extraInfo: { streaming: true },
+                            extraInfo: { streaming: true, trace: event.trace || [] },
                           }
                         : item
                     ),
@@ -287,9 +311,9 @@ function App() {
                   item.key === aiKey
                     ? {
                         ...item,
-                        content: buildAiContent(data.reply || "", data.trace),
+                        content: buildAiContent(data.reply || "", false),
                         status: "success",
-                        extraInfo: { streaming: false },
+                        extraInfo: { streaming: false, trace: data.trace || [] },
                       }
                     : item
                 ),
