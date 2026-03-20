@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { app, BrowserWindow, ipcMain } from "electron";
 import path from "path";
+import { buildClaudeOptions } from "./backend/claudeOptions";
 
 type ChatMeta = {
   costUsd?: number;
@@ -30,22 +31,7 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
 
-  const options: {
-    maxTurns: number;
-    tools: never[];
-    env: NodeJS.ProcessEnv;
-    model?: string;
-  } = {
-    maxTurns: 4,
-    tools: [],
-    env: {
-      ...process.env,
-    },
-  };
-
-  if (process.env.CLAUDE_MODEL) {
-    options.model = process.env.CLAUDE_MODEL;
-  }
+  const options = buildClaudeOptions();
 
   for await (const sdkMessage of query({ prompt: clean, options })) {
     if (sdkMessage.type !== "result") {

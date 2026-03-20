@@ -28,8 +28,16 @@ ANTHROPIC_API_KEY=你的密钥
 
 ```bash
 CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_PERMISSION_MODE=bypassPermissions
+# CLAUDE_ALLOWED_TOOLS=Bash,Read,Write,Edit,Grep,Glob
+# CLAUDE_DISALLOWED_TOOLS=
 PORT=3001
 ```
+
+说明：
+- 默认启用 Claude Code 内置工具集（含 `Bash`）。
+- 默认权限模式为 `bypassPermissions`（自动放行工具调用，不弹权限确认）。
+- 你可以通过 `CLAUDE_ALLOWED_TOOLS` / `CLAUDE_DISALLOWED_TOOLS` 精细控制可用工具。
 
 3. 启动 Electron 版（IPC）
 

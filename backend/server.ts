@@ -3,6 +3,7 @@ import "dotenv/config";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
+import { buildClaudeOptions } from "./claudeOptions";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -42,22 +43,7 @@ app.post(
         stopReason?: string | null;
       } | null = null;
 
-      const options: {
-        maxTurns: number;
-        tools: never[];
-        env: NodeJS.ProcessEnv;
-        model?: string;
-      } = {
-        maxTurns: 4,
-        tools: [],
-        env: {
-          ...process.env,
-        },
-      };
-
-      if (process.env.CLAUDE_MODEL) {
-        options.model = process.env.CLAUDE_MODEL;
-      }
+      const options = buildClaudeOptions();
 
       for await (const sdkMessage of query({ prompt: message, options })) {
         if (sdkMessage.type !== "result") {
