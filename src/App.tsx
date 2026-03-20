@@ -9,6 +9,7 @@ type ChatItem = {
   key: string;
   role: Role;
   content: string;
+  streaming?: boolean;
   status?: "loading" | "success" | "error" | "abort";
   extraInfo?: {
     streaming?: boolean;
@@ -101,17 +102,12 @@ function App() {
         ai: {
           placement: "start",
           variant: "borderless",
-          typing: (_content: string, info: { extraInfo?: { streaming?: boolean } }) =>
-            info?.extraInfo?.streaming
-              ? {
-                  effect: "typing" as const,
-                  step: [2, 5] as [number, number],
-                  interval: 30,
-                  keepPrefix: true,
-                }
-              : false,
-          contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) =>
-            info?.extraInfo?.streaming ? content : <XMarkdown content={content} />,
+          contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) => (
+            <XMarkdown
+              content={content}
+              streaming={{ hasNextChunk: Boolean(info?.extraInfo?.streaming) }}
+            />
+          ),
           footer: () => null,
         },
         user: { placement: "end", variant: "filled" },
@@ -175,6 +171,7 @@ function App() {
               key: aiKey,
               role: "ai",
               content: "思考中...",
+              streaming: true,
               status: "loading",
               extraInfo: { streaming: true, trace: [] },
             },
@@ -201,6 +198,7 @@ function App() {
                         item.key === aiKey
                           ? {
                               ...item,
+                              streaming: false,
                               status: "abort",
                               extraInfo: { streaming: false },
                               content: `${item.content}\n\n（已停止）`,
@@ -225,6 +223,7 @@ function App() {
                       item.key === aiKey
                         ? {
                             ...item,
+                            streaming: true,
                             content: buildAiContent(event.rendered || event.reply || "", true),
                             status: "loading",
                             extraInfo: { streaming: true, trace: event.trace || [] },
@@ -274,6 +273,7 @@ function App() {
                   item.key === aiKey
                     ? {
                         ...item,
+                        streaming: false,
                         content: buildAiContent(data.rendered || data.reply || "", false),
                         status: "success",
                         extraInfo: { streaming: false, trace: data.trace || [] },
@@ -294,6 +294,7 @@ function App() {
                   item.key === aiKey
                     ? {
                         ...item,
+                        streaming: false,
                         content:
                           error instanceof Error
                             ? `调用失败：${error.message}`
