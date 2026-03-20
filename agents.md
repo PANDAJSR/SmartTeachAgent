@@ -8,3 +8,4 @@
 
 # 前端使用 Ant Design X 作为对话界面库
 - 必要时查官方文档
+- 优先使用官方组件能力（如 Conversations / Sender / Bubble），非必要不自定义样式

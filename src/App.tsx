@@ -41,6 +41,14 @@ const buildTitleFromInput = (text: string): string => {
   return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
 };
 
+const formatConversationTime = (timestamp: number): string =>
+  new Date(timestamp).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -71,19 +79,7 @@ function App() {
     () =>
       conversations.map((conversation) => ({
         key: conversation.id,
-        label: (
-          <div className="conversation-item-content">
-            <span className="conversation-item-title">{conversation.title}</span>
-            <span className="conversation-item-time">
-              {new Date(conversation.createdAt).toLocaleString("zh-CN", {
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </span>
-          </div>
-        ),
+        label: `${conversation.title} · ${formatConversationTime(conversation.createdAt)}`,
       })),
     [conversations]
   );
@@ -203,7 +199,6 @@ function App() {
                 </Typography.Title>
               </div>
               <Conversations
-                className="conversation-list"
                 items={conversationItems}
                 activeKey={activeConversationId}
                 onActiveChange={(value) => setActiveConversationId(String(value))}
