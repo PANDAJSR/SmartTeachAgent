@@ -1,5 +1,73 @@
-const { app, BrowserWindow } = require("electron");
+require("dotenv").config();
+
+const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
+
+async function runClaudeChat(message) {
+  const clean = (message || "").trim();
+  if (!clean) {
+    throw new Error("message 不能为空");
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("缺少 ANTHROPIC_API_KEY，请先在 .env 中配置后重试");
+  }
+
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+
+  let finalResult = "";
+  let resultMeta = null;
+
+  const options = {
+    maxTurns: 4,
+    tools: [],
+    env: {
+      ...process.env,
+    },
+  };
+
+  if (process.env.CLAUDE_MODEL) {
+    options.model = process.env.CLAUDE_MODEL;
+  }
+
+  for await (const sdkMessage of query({ prompt: clean, options })) {
+    if (sdkMessage.type !== "result") {
+      continue;
+    }
+
+    if (sdkMessage.subtype === "success") {
+      finalResult = sdkMessage.result;
+      resultMeta = {
+        costUsd: sdkMessage.total_cost_usd,
+        durationMs: sdkMessage.duration_ms,
+        turns: sdkMessage.num_turns,
+        stopReason: sdkMessage.stop_reason,
+      };
+    } else {
+      const detail = sdkMessage.errors?.join("; ") || "Claude Agent 执行失败";
+      throw new Error(detail);
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("未获取到 Claude 返回内容");
+  }
+
+  return {
+    reply: finalResult,
+    meta: resultMeta,
+  };
+}
+
+ipcMain.handle("chat:send", async (_event, payload) => {
+  try {
+    return await runClaudeChat(payload?.message);
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "服务异常",
+    };
+  }
+});
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -8,6 +76,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 

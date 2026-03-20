@@ -4,7 +4,7 @@
   "description": "【新饼】专为班级大屏设计的 Claude Code 套壳版",
   "main": "main.js",
   "scripts": {
-    "dev": "concurrently -k \"pnpm run vite\" \"pnpm run server\" \"pnpm run electron:dev\"",
+    "dev": "concurrently -k \"pnpm run vite\" \"pnpm run electron:dev\"",
     "dev:demo": "concurrently -k \"pnpm run vite\" \"pnpm run server\"",
     "server": "node backend/server.mjs",
     "vite": "vite",

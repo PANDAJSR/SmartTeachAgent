@@ -33,18 +33,25 @@ function App() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ message: clean }),
-      });
+      let data;
+      if (window.smartTeach?.chat) {
+        data = await window.smartTeach.chat(clean);
+      } else {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ message: clean }),
+        });
+        data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || "请求失败");
+        }
+      }
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || "请求失败");
+      if (data?.error) {
+        throw new Error(data.error);
       }
 
       setItems((prev) =>
