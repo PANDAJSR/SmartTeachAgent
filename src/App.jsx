@@ -1,23 +1,11 @@
 import { useMemo, useState } from "react";
 import { Bubble, Sender } from "@ant-design/x";
-import { Button, Card, Space, Typography } from "antd";
-
-const QUICK_PROMPTS = [
-  "请帮我生成一份今天的英语课开场白",
-  "给五年级设计一个 10 分钟的数学互动小游戏",
-  "把这句话翻译成英文：请保持安静，马上开始上课。",
-];
+import { Card, Space, Typography } from "antd";
 
 function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState([
-    {
-      key: "welcome",
-      role: "ai",
-      content: "你好，我是课堂助教 Agent。你可以让我生成教案、课堂活动或双语表达。",
-    },
-  ]);
+  const [items, setItems] = useState([]);
 
   const roles = useMemo(
     () => ({
@@ -95,19 +83,6 @@ function App() {
               前端：Ant Design X ｜ 后端：Claude Agent SDK
             </Typography.Text>
           </div>
-
-          <Space size={8} wrap>
-            {QUICK_PROMPTS.map((prompt) => (
-              <Button
-                key={prompt}
-                size="small"
-                onClick={() => setInput(prompt)}
-                disabled={loading}
-              >
-                {prompt}
-              </Button>
-            ))}
-          </Space>
 
           <div className="chat-window">
             <Bubble.List items={items} role={roles} autoScroll />
