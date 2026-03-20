@@ -116,27 +116,21 @@ function App() {
             const thinkingSteps = trace.filter((item) => item.type === "thinking").map((item) => item.text);
             const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
 
-            if (!streaming && thinkingSteps.length === 0 && toolSteps.length === 0) {
+            if (thinkingSteps.length === 0 && toolSteps.length === 0) {
               return null;
             }
 
             return (
               <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Think
-                  title={streaming ? "思考中" : "思考过程"}
-                  loading={streaming && thinkingSteps.length === 0}
-                  defaultExpanded={false}
-                >
-                  {thinkingSteps.length > 0 ? (
+                {thinkingSteps.length > 0 ? (
+                  <Think title={streaming ? "思考中" : "思考过程"} loading={streaming} defaultExpanded={false}>
                     <ol style={{ margin: 0, paddingLeft: 18 }}>
                       {thinkingSteps.map((step, idx) => (
                         <li key={`thinking-${idx}`}>{step}</li>
                       ))}
                     </ol>
-                  ) : (
-                    <Typography.Text type="secondary">正在整理思路...</Typography.Text>
-                  )}
-                </Think>
+                  </Think>
+                ) : null}
 
                 {toolSteps.length > 0 ? (
                   <Think title="工具调用过程" defaultExpanded={false}>

@@ -84,7 +84,7 @@ async function runClaudeChat(
 
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
-  const trace: TraceEntry[] = [{ type: "thinking", text: "正在分析你的问题..." }];
+  const trace: TraceEntry[] = [];
   let streamedReply = "";
 
   const emitProgress = (): void => {
@@ -153,9 +153,6 @@ async function runClaudeChat(
       }
       if (sdkMessage.subtype === "task_progress") {
         pushTrace(trace, "tool", `任务进度：${sdkMessage.description}`);
-        if (sdkMessage.summary) {
-          pushTrace(trace, "thinking", sdkMessage.summary);
-        }
         emitProgress();
       }
       if (sdkMessage.subtype === "task_notification") {
