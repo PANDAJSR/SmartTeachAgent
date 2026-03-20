@@ -53,36 +53,15 @@ body {
 }
 
 .conversation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   max-height: 66vh;
   overflow: auto;
   padding-right: 4px;
 }
 
-.conversation-item {
-  width: 100%;
-  border: 1px solid #e4ecff;
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: #f9fbff;
+.conversation-item-content {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: 4px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.conversation-item:hover {
-  border-color: #8db7ff;
-  background: #f2f7ff;
-}
-
-.conversation-item.active {
-  border-color: #5f95ff;
-  background: #edf4ff;
 }
 
 .conversation-item-title {

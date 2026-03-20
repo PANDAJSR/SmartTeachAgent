@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Bubble, Sender } from "@ant-design/x";
+import { Bubble, Conversations, Sender } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Button, Card, Space, Typography } from "antd";
+import { Card, Space, Typography } from "antd";
 
 type Role = "user" | "ai";
 
@@ -67,6 +67,26 @@ function App() {
   );
 
   const activeItems = activeConversation?.items ?? [];
+  const conversationItems = useMemo(
+    () =>
+      conversations.map((conversation) => ({
+        key: conversation.id,
+        label: (
+          <div className="conversation-item-content">
+            <span className="conversation-item-title">{conversation.title}</span>
+            <span className="conversation-item-time">
+              {new Date(conversation.createdAt).toLocaleString("zh-CN", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          </div>
+        ),
+      })),
+    [conversations]
+  );
 
   const createNewConversation = (): void => {
     if (loading) {
@@ -181,32 +201,17 @@ function App() {
                 <Typography.Title level={4} style={{ margin: 0 }}>
                   对话列表
                 </Typography.Title>
-                <Button type="primary" onClick={createNewConversation} disabled={loading}>
-                  新建对话
-                </Button>
               </div>
-              <div className="conversation-list">
-                {conversations.map((conversation) => (
-                  <button
-                    type="button"
-                    key={conversation.id}
-                    className={`conversation-item ${
-                      conversation.id === activeConversationId ? "active" : ""
-                    }`}
-                    onClick={() => setActiveConversationId(conversation.id)}
-                  >
-                    <span className="conversation-item-title">{conversation.title}</span>
-                    <span className="conversation-item-time">
-                      {new Date(conversation.createdAt).toLocaleString("zh-CN", {
-                        month: "2-digit",
-                        day: "2-digit",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <Conversations
+                className="conversation-list"
+                items={conversationItems}
+                activeKey={activeConversationId}
+                onActiveChange={(value) => setActiveConversationId(String(value))}
+                creation={{
+                  disabled: loading,
+                  onClick: createNewConversation,
+                }}
+              />
             </Space>
           </aside>
 
