@@ -11,10 +11,40 @@ type ChatMeta = {
   stopReason?: string | null;
 };
 
+type TraceEntry = {
+  type: "tool" | "thinking";
+  text: string;
+};
+
 type ChatResult = {
   reply: string;
   meta: ChatMeta | null;
+  trace: TraceEntry[];
 };
+
+function toPreview(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    if (!text) {
+      return "";
+    }
+    return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+function pushTrace(trace: TraceEntry[], type: TraceEntry["type"], text: string): void {
+  const clean = text.trim();
+  if (!clean) {
+    return;
+  }
+  const prev = trace[trace.length - 1];
+  if (prev && prev.type === type && prev.text === clean) {
+    return;
+  }
+  trace.push({ type, text: clean });
+}
 
 async function runClaudeChat(message?: string): Promise<ChatResult> {
   const clean = (message || "").trim();
@@ -30,10 +60,84 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
 
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
+  const trace: TraceEntry[] = [];
 
   const options = buildClaudeOptions();
+  options.includePartialMessages = true;
 
   for await (const sdkMessage of query({ prompt: clean, options })) {
+    if (sdkMessage.type === "assistant") {
+      const blocks = sdkMessage.message?.content;
+      if (Array.isArray(blocks)) {
+        for (const block of blocks) {
+          if (!block || typeof block !== "object" || !("type" in block)) {
+            continue;
+          }
+          if (block.type === "tool_use") {
+            const inputPreview = toPreview(block.input);
+            pushTrace(
+              trace,
+              "tool",
+              `准备调用工具 ${block.name}${inputPreview ? `，参数：${inputPreview}` : ""}`
+            );
+          }
+          if (block.type === "thinking" && typeof block.thinking === "string") {
+            pushTrace(trace, "thinking", block.thinking);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (sdkMessage.type === "tool_progress") {
+      pushTrace(
+        trace,
+        "tool",
+        `工具 ${sdkMessage.tool_name} 执行中（${Math.round(sdkMessage.elapsed_time_seconds)}s）`
+      );
+      continue;
+    }
+
+    if (sdkMessage.type === "tool_use_summary") {
+      pushTrace(trace, "tool", sdkMessage.summary);
+      continue;
+    }
+
+    if (sdkMessage.type === "system") {
+      if (sdkMessage.subtype === "task_started") {
+        pushTrace(trace, "tool", `任务开始：${sdkMessage.description}`);
+      }
+      if (sdkMessage.subtype === "task_progress") {
+        pushTrace(trace, "tool", `任务进度：${sdkMessage.description}`);
+        if (sdkMessage.summary) {
+          pushTrace(trace, "thinking", sdkMessage.summary);
+        }
+      }
+      if (sdkMessage.subtype === "task_notification") {
+        pushTrace(trace, "tool", `任务${sdkMessage.status}：${sdkMessage.summary}`);
+      }
+      continue;
+    }
+
+    if (sdkMessage.type === "stream_event") {
+      const event = sdkMessage.event;
+      if (
+        event &&
+        typeof event === "object" &&
+        "type" in event &&
+        event.type === "content_block_delta" &&
+        "delta" in event &&
+        event.delta &&
+        typeof event.delta === "object" &&
+        "type" in event.delta &&
+        event.delta.type === "thinking_delta" &&
+        typeof event.delta.thinking === "string"
+      ) {
+        pushTrace(trace, "thinking", event.delta.thinking);
+      }
+      continue;
+    }
+
     if (sdkMessage.type !== "result") {
       continue;
     }
@@ -59,6 +163,7 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
   return {
     reply: finalResult,
     meta: resultMeta,
+    trace,
   };
 }
 

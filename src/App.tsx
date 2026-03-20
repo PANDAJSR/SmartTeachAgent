@@ -11,9 +11,15 @@ type ChatItem = {
   content: string;
 };
 
+type TraceEntry = {
+  type: "tool" | "thinking";
+  text: string;
+};
+
 type ChatResponse = {
   reply?: string;
   error?: string;
+  trace?: TraceEntry[];
 };
 
 type Conversation = {
@@ -48,6 +54,29 @@ const formatConversationTime = (timestamp: number): string =>
     hour: "2-digit",
     minute: "2-digit",
   });
+
+const toMarkdownList = (items: string[]): string => items.map((item, idx) => `${idx + 1}. ${item}`).join("\n");
+
+const buildAiContent = (reply: string, trace?: TraceEntry[]): string => {
+  const sections: string[] = [reply.trim() || "（无文本回复）"];
+
+  if (trace && trace.length > 0) {
+    const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
+    const thinkingSteps = trace.filter((item) => item.type === "thinking").map((item) => item.text);
+
+    if (toolSteps.length > 0) {
+      sections.push("### 工具调用过程");
+      sections.push(toMarkdownList(toolSteps));
+    }
+
+    if (thinkingSteps.length > 0) {
+      sections.push("### 思考过程（摘要）");
+      sections.push(toMarkdownList(thinkingSteps));
+    }
+  }
+
+  return sections.join("\n\n");
+};
 
 function App() {
   const initialConversation = createConversation(1);
@@ -155,7 +184,9 @@ function App() {
             ? {
                 ...conversation,
                 items: conversation.items.map((item) =>
-                  item.key === aiKey ? { ...item, content: data.reply || "" } : item
+                  item.key === aiKey
+                    ? { ...item, content: buildAiContent(data.reply || "", data.trace) }
+                    : item
                 ),
               }
             : conversation
