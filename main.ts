@@ -16,6 +16,11 @@ type TraceEntry = {
   text: string;
 };
 
+type ChatProgressSnapshot = {
+  reply: string;
+  trace: TraceEntry[];
+};
+
 type ChatResult = {
   reply: string;
   meta: ChatMeta | null;
@@ -46,7 +51,22 @@ function pushTrace(trace: TraceEntry[], type: TraceEntry["type"], text: string):
   trace.push({ type, text: clean });
 }
 
-async function runClaudeChat(message?: string): Promise<ChatResult> {
+function appendTrace(trace: TraceEntry[], type: TraceEntry["type"], delta: string): void {
+  if (!delta) {
+    return;
+  }
+  const prev = trace[trace.length - 1];
+  if (prev && prev.type === type) {
+    prev.text += delta;
+    return;
+  }
+  trace.push({ type, text: delta });
+}
+
+async function runClaudeChat(
+  message?: string,
+  onProgress?: (snapshot: ChatProgressSnapshot) => void
+): Promise<ChatResult> {
   const clean = (message || "").trim();
   if (!clean) {
     throw new Error("message 不能为空");
@@ -61,6 +81,17 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
   const trace: TraceEntry[] = [];
+  let streamedReply = "";
+
+  const emitProgress = (): void => {
+    if (!onProgress) {
+      return;
+    }
+    onProgress({
+      reply: streamedReply,
+      trace: trace.map((item) => ({ ...item })),
+    });
+  };
 
   const options = buildClaudeOptions();
   options.includePartialMessages = true;
@@ -80,9 +111,11 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
               "tool",
               `准备调用工具 ${block.name}${inputPreview ? `，参数：${inputPreview}` : ""}`
             );
+            emitProgress();
           }
           if (block.type === "thinking" && typeof block.thinking === "string") {
             pushTrace(trace, "thinking", block.thinking);
+            emitProgress();
           }
         }
       }
@@ -95,26 +128,31 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
         "tool",
         `工具 ${sdkMessage.tool_name} 执行中（${Math.round(sdkMessage.elapsed_time_seconds)}s）`
       );
+      emitProgress();
       continue;
     }
 
     if (sdkMessage.type === "tool_use_summary") {
       pushTrace(trace, "tool", sdkMessage.summary);
+      emitProgress();
       continue;
     }
 
     if (sdkMessage.type === "system") {
       if (sdkMessage.subtype === "task_started") {
         pushTrace(trace, "tool", `任务开始：${sdkMessage.description}`);
+        emitProgress();
       }
       if (sdkMessage.subtype === "task_progress") {
         pushTrace(trace, "tool", `任务进度：${sdkMessage.description}`);
         if (sdkMessage.summary) {
           pushTrace(trace, "thinking", sdkMessage.summary);
         }
+        emitProgress();
       }
       if (sdkMessage.subtype === "task_notification") {
         pushTrace(trace, "tool", `任务${sdkMessage.status}：${sdkMessage.summary}`);
+        emitProgress();
       }
       continue;
     }
@@ -130,10 +168,27 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
         event.delta &&
         typeof event.delta === "object" &&
         "type" in event.delta &&
+        event.delta.type === "text_delta" &&
+        typeof event.delta.text === "string"
+      ) {
+        streamedReply += event.delta.text;
+        emitProgress();
+      }
+
+      if (
+        event &&
+        typeof event === "object" &&
+        "type" in event &&
+        event.type === "content_block_delta" &&
+        "delta" in event &&
+        event.delta &&
+        typeof event.delta === "object" &&
+        "type" in event.delta &&
         event.delta.type === "thinking_delta" &&
         typeof event.delta.thinking === "string"
       ) {
-        pushTrace(trace, "thinking", event.delta.thinking);
+        appendTrace(trace, "thinking", event.delta.thinking);
+        emitProgress();
       }
       continue;
     }
@@ -144,12 +199,14 @@ async function runClaudeChat(message?: string): Promise<ChatResult> {
 
     if (sdkMessage.subtype === "success") {
       finalResult = sdkMessage.result;
+      streamedReply = finalResult;
       resultMeta = {
         costUsd: sdkMessage.total_cost_usd,
         durationMs: sdkMessage.duration_ms,
         turns: sdkMessage.num_turns,
         stopReason: sdkMessage.stop_reason,
       };
+      emitProgress();
     } else {
       const detail = sdkMessage.errors?.join("; ") || "Claude Agent 执行失败";
       throw new Error(detail);
@@ -176,6 +233,39 @@ ipcMain.handle(
       return {
         error: error instanceof Error ? error.message : "服务异常",
       };
+    }
+  }
+);
+
+ipcMain.handle(
+  "chat:send:stream",
+  async (
+    event,
+    payload?: { message?: string; requestId?: string }
+  ): Promise<ChatResult | { error: string }> => {
+    const requestId = (payload?.requestId || "").trim();
+    if (!requestId) {
+      return { error: "缺少 requestId" };
+    }
+    const channel = `chat:stream:${requestId}`;
+    const sendSnapshot = (snapshot: ChatProgressSnapshot): void => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(channel, { type: "snapshot", ...snapshot });
+      }
+    };
+
+    try {
+      const result = await runClaudeChat(payload?.message, sendSnapshot);
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(channel, { type: "done" });
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "服务异常";
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(channel, { type: "error", error: message });
+      }
+      return { error: message };
     }
   }
 );

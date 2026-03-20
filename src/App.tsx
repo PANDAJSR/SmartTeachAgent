@@ -22,6 +22,20 @@ type ChatResponse = {
   trace?: TraceEntry[];
 };
 
+type StreamEvent =
+  | {
+      type: "snapshot";
+      reply: string;
+      trace: TraceEntry[];
+    }
+  | {
+      type: "done";
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
 type Conversation = {
   id: string;
   title: string;
@@ -57,8 +71,10 @@ const formatConversationTime = (timestamp: number): string =>
 
 const toMarkdownList = (items: string[]): string => items.map((item, idx) => `${idx + 1}. ${item}`).join("\n");
 
-const buildAiContent = (reply: string, trace?: TraceEntry[]): string => {
-  const sections: string[] = [reply.trim() || "（无文本回复）"];
+const buildAiContent = (reply: string, trace?: TraceEntry[], streaming = false): string => {
+  const hasReply = reply.trim().length > 0;
+  const hasTrace = Boolean(trace && trace.length > 0);
+  const sections: string[] = [hasReply ? reply.trim() : streaming || hasTrace ? "思考中..." : "（无文本回复）"];
 
   if (trace && trace.length > 0) {
     const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
@@ -157,8 +173,31 @@ function App() {
     setLoading(true);
 
     try {
-      let data: ChatResponse;
-      if (window.smartTeach?.chat) {
+      let data: ChatResponse | undefined;
+      if (window.smartTeach?.chatStream) {
+        data = await window.smartTeach.chatStream(clean, (event: StreamEvent) => {
+          if (event.type !== "snapshot") {
+            return;
+          }
+          setConversations((prev) =>
+            prev.map((conversation) =>
+              conversation.id === currentConversationId
+                ? {
+                    ...conversation,
+                    items: conversation.items.map((item) =>
+                      item.key === aiKey
+                        ? {
+                            ...item,
+                            content: buildAiContent(event.reply || "", event.trace, true),
+                          }
+                        : item
+                    ),
+                  }
+                : conversation
+            )
+          );
+        });
+      } else if (window.smartTeach?.chat) {
         data = await window.smartTeach.chat(clean);
       } else {
         const response = await fetch("/api/chat", {
@@ -172,6 +211,10 @@ function App() {
         if (!response.ok) {
           throw new Error(data.error || "请求失败");
         }
+      }
+
+      if (!data) {
+        throw new Error("未获取到响应数据");
       }
 
       if (data.error) {
