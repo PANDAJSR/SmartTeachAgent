@@ -2,20 +2,33 @@ import { useMemo, useState } from "react";
 import { Bubble, Sender } from "@ant-design/x";
 import { Card, Space, Typography } from "antd";
 
+type Role = "user" | "ai";
+
+type ChatItem = {
+  key: string;
+  role: Role;
+  content: string;
+};
+
+type ChatResponse = {
+  reply?: string;
+  error?: string;
+};
+
 function App() {
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState([]);
+  const [input, setInput] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [items, setItems] = useState<ChatItem[]>([]);
 
   const roles = useMemo(
     () => ({
       ai: { placement: "start", variant: "borderless" },
       user: { placement: "end", variant: "filled" },
-    }),
+    } as const),
     []
   );
 
-  const sendMessage = async (text) => {
+  const sendMessage = async (text: string): Promise<void> => {
     const clean = text.trim();
     if (!clean || loading) {
       return;
@@ -33,7 +46,7 @@ function App() {
     setLoading(true);
 
     try {
-      let data;
+      let data: ChatResponse;
       if (window.smartTeach?.chat) {
         data = await window.smartTeach.chat(clean);
       } else {
@@ -44,20 +57,18 @@ function App() {
           },
           body: JSON.stringify({ message: clean }),
         });
-        data = await response.json();
+        data = (await response.json()) as ChatResponse;
         if (!response.ok) {
-          throw new Error(data?.error || "请求失败");
+          throw new Error(data.error || "请求失败");
         }
       }
 
-      if (data?.error) {
+      if (data.error) {
         throw new Error(data.error);
       }
 
       setItems((prev) =>
-        prev.map((item) =>
-          item.key === aiKey ? { ...item, content: data.reply } : item
-        )
+        prev.map((item) => (item.key === aiKey ? { ...item, content: data.reply || "" } : item))
       );
     } catch (error) {
       setItems((prev) =>

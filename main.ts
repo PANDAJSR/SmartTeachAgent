@@ -1,9 +1,21 @@
-require("dotenv").config();
+import "dotenv/config";
 
-const { app, BrowserWindow, ipcMain } = require("electron");
-const path = require("path");
+import { app, BrowserWindow, ipcMain } from "electron";
+import path from "path";
 
-async function runClaudeChat(message) {
+type ChatMeta = {
+  costUsd?: number;
+  durationMs?: number;
+  turns?: number;
+  stopReason?: string | null;
+};
+
+type ChatResult = {
+  reply: string;
+  meta: ChatMeta | null;
+};
+
+async function runClaudeChat(message?: string): Promise<ChatResult> {
   const clean = (message || "").trim();
   if (!clean) {
     throw new Error("message 不能为空");
@@ -16,9 +28,14 @@ async function runClaudeChat(message) {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   let finalResult = "";
-  let resultMeta = null;
+  let resultMeta: ChatMeta | null = null;
 
-  const options = {
+  const options: {
+    maxTurns: number;
+    tools: never[];
+    env: NodeJS.ProcessEnv;
+    model?: string;
+  } = {
     maxTurns: 4,
     tools: [],
     env: {
@@ -59,17 +76,20 @@ async function runClaudeChat(message) {
   };
 }
 
-ipcMain.handle("chat:send", async (_event, payload) => {
-  try {
-    return await runClaudeChat(payload?.message);
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "服务异常",
-    };
+ipcMain.handle(
+  "chat:send",
+  async (_event, payload?: { message?: string }): Promise<ChatResult | { error: string }> => {
+    try {
+      return await runClaudeChat(payload?.message);
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : "服务异常",
+      };
+    }
   }
-});
+);
 
-function createWindow() {
+function createWindow(): void {
   const win = new BrowserWindow({
     width: 1000,
     height: 700,
@@ -82,20 +102,24 @@ function createWindow() {
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
-    win.loadURL(devServerUrl);
+    void win.loadURL(devServerUrl);
   } else {
-    win.loadFile(path.join(__dirname, "dist", "index.html"));
+    void win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 }
 
-app.whenReady().then(() => {
+void app.whenReady().then(() => {
   createWindow();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });

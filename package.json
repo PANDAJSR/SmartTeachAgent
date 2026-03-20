@@ -2,15 +2,18 @@
   "name": "smartteachagent",
   "version": "1.0.0",
   "description": "【新饼】专为班级大屏设计的 Claude Code 套壳版",
-  "main": "main.js",
+  "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"pnpm run vite\" \"pnpm run electron:dev\"",
+    "dev": "concurrently -k \"pnpm run vite\" \"pnpm run electron:build:watch\" \"pnpm run electron:dev\"",
     "dev:demo": "concurrently -k \"pnpm run vite\" \"pnpm run server\"",
-    "server": "node backend/server.mjs",
+    "server": "pnpm run electron:build && node dist-electron/backend/server.js",
     "vite": "vite",
-    "electron:dev": "wait-on tcp:5173 && env -u ELECTRON_RUN_AS_NODE cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
-    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
-    "build": "vite build",
+    "electron:build": "tsc -p tsconfig.node.json",
+    "electron:build:watch": "tsc -p tsconfig.node.json --watch --preserveWatchOutput",
+    "electron:dev": "wait-on tcp:5173 dist-electron/main.js && env -u ELECTRON_RUN_AS_NODE cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "start": "pnpm run electron:build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "build": "pnpm run electron:build && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "preview": "vite preview"
   },
   "repository": {
@@ -40,10 +43,17 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^41.0.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
     "vite": "^8.0.1",
     "wait-on": "^9.0.4"
   }
