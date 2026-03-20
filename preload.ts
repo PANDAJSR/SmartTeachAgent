@@ -8,6 +8,7 @@ type TraceEntry = {
 type StreamEvent = {
   type: "snapshot";
   reply: string;
+  rendered: string;
   trace: TraceEntry[];
 } | {
   type: "done";

@@ -16,15 +16,22 @@ type TraceEntry = {
   text: string;
 };
 
+type ContentSegment = {
+  type: "text" | "tool";
+  text: string;
+};
+
 type ChatProgressSnapshot = {
   reply: string;
   trace: TraceEntry[];
+  rendered: string;
 };
 
 type ChatResult = {
   reply: string;
   meta: ChatMeta | null;
   trace: TraceEntry[];
+  rendered: string;
   stopped?: boolean;
 };
 
@@ -66,6 +73,49 @@ function appendTrace(trace: TraceEntry[], type: TraceEntry["type"], delta: strin
   trace.push({ type, text: delta });
 }
 
+function pushToolSegment(segments: ContentSegment[], text: string): void {
+  const clean = text.trim();
+  if (!clean) {
+    return;
+  }
+  const prev = segments[segments.length - 1];
+  if (prev && prev.type === "tool" && prev.text === clean) {
+    return;
+  }
+  segments.push({ type: "tool", text: clean });
+}
+
+function appendTextSegment(segments: ContentSegment[], delta: string): void {
+  if (!delta) {
+    return;
+  }
+  const prev = segments[segments.length - 1];
+  if (prev && prev.type === "text") {
+    prev.text += delta;
+    return;
+  }
+  segments.push({ type: "text", text: delta });
+}
+
+function buildRenderedContent(segments: ContentSegment[], fallbackReply: string): string {
+  const blocks: string[] = [];
+  for (const segment of segments) {
+    if (segment.type === "tool") {
+      blocks.push(`> [工具调用] ${segment.text}`);
+      continue;
+    }
+    if (!segment.text) {
+      continue;
+    }
+    blocks.push(segment.text);
+  }
+  const rendered = blocks.join("\n\n").trim();
+  if (rendered) {
+    return rendered;
+  }
+  return fallbackReply.trim();
+}
+
 async function runClaudeChat(
   message?: string,
   onProgress?: (snapshot: ChatProgressSnapshot) => void,
@@ -85,15 +135,18 @@ async function runClaudeChat(
   let finalResult = "";
   let resultMeta: ChatMeta | null = null;
   const trace: TraceEntry[] = [];
+  const segments: ContentSegment[] = [];
   let streamedReply = "";
 
   const emitProgress = (): void => {
     if (!onProgress) {
       return;
     }
+    const rendered = buildRenderedContent(segments, streamedReply);
     onProgress({
       reply: streamedReply,
       trace: trace.map((item) => ({ ...item })),
+      rendered,
     });
   };
 
@@ -114,11 +167,14 @@ async function runClaudeChat(
           }
           if (block.type === "tool_use") {
             const inputPreview = toPreview(block.input);
-            pushTrace(
-              trace,
-              "tool",
-              `准备调用工具 ${block.name}${inputPreview ? `，参数：${inputPreview}` : ""}`
-            );
+            const text = `准备调用工具 ${block.name}${inputPreview ? `，参数：${inputPreview}` : ""}`;
+            pushTrace(trace, "tool", text);
+            pushToolSegment(segments, text);
+            emitProgress();
+            continue;
+          }
+          if (block.type === "text" && typeof block.text === "string" && !streamedReply) {
+            appendTextSegment(segments, block.text);
             emitProgress();
           }
           if (block.type === "thinking" && typeof block.thinking === "string") {
@@ -131,32 +187,37 @@ async function runClaudeChat(
     }
 
     if (sdkMessage.type === "tool_progress") {
-      pushTrace(
-        trace,
-        "tool",
-        `工具 ${sdkMessage.tool_name} 执行中（${Math.round(sdkMessage.elapsed_time_seconds)}s）`
-      );
+      const text = `工具 ${sdkMessage.tool_name} 执行中（${Math.round(sdkMessage.elapsed_time_seconds)}s）`;
+      pushTrace(trace, "tool", text);
+      pushToolSegment(segments, text);
       emitProgress();
       continue;
     }
 
     if (sdkMessage.type === "tool_use_summary") {
       pushTrace(trace, "tool", sdkMessage.summary);
+      pushToolSegment(segments, sdkMessage.summary);
       emitProgress();
       continue;
     }
 
     if (sdkMessage.type === "system") {
       if (sdkMessage.subtype === "task_started") {
-        pushTrace(trace, "tool", `任务开始：${sdkMessage.description}`);
+        const text = `任务开始：${sdkMessage.description}`;
+        pushTrace(trace, "tool", text);
+        pushToolSegment(segments, text);
         emitProgress();
       }
       if (sdkMessage.subtype === "task_progress") {
-        pushTrace(trace, "tool", `任务进度：${sdkMessage.description}`);
+        const text = `任务进度：${sdkMessage.description}`;
+        pushTrace(trace, "tool", text);
+        pushToolSegment(segments, text);
         emitProgress();
       }
       if (sdkMessage.subtype === "task_notification") {
-        pushTrace(trace, "tool", `任务${sdkMessage.status}：${sdkMessage.summary}`);
+        const text = `任务${sdkMessage.status}：${sdkMessage.summary}`;
+        pushTrace(trace, "tool", text);
+        pushToolSegment(segments, text);
         emitProgress();
       }
       continue;
@@ -177,6 +238,7 @@ async function runClaudeChat(
         typeof event.delta.text === "string"
       ) {
         streamedReply += event.delta.text;
+        appendTextSegment(segments, event.delta.text);
         emitProgress();
       }
 
@@ -205,6 +267,9 @@ async function runClaudeChat(
     if (sdkMessage.subtype === "success") {
       finalResult = sdkMessage.result;
       streamedReply = finalResult;
+      if (!segments.some((segment) => segment.type === "text" && segment.text.trim())) {
+        appendTextSegment(segments, finalResult);
+      }
       resultMeta = {
         costUsd: sdkMessage.total_cost_usd,
         durationMs: sdkMessage.duration_ms,
@@ -223,6 +288,7 @@ async function runClaudeChat(
         reply: streamedReply,
         meta: resultMeta,
         trace,
+        rendered: buildRenderedContent(segments, streamedReply),
         stopped: true,
       };
     }
@@ -237,6 +303,7 @@ async function runClaudeChat(
     reply: finalResult || streamedReply,
     meta: resultMeta,
     trace,
+    rendered: buildRenderedContent(segments, finalResult || streamedReply),
   };
 }
 

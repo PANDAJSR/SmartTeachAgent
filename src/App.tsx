@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
+import { Bubble, Conversations, Sender } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
 
@@ -23,6 +23,7 @@ type TraceEntry = {
 
 type ChatResponse = {
   reply?: string;
+  rendered?: string;
   error?: string;
   trace?: TraceEntry[];
 };
@@ -31,6 +32,7 @@ type StreamEvent =
   | {
       type: "snapshot";
       reply: string;
+      rendered: string;
       trace: TraceEntry[];
     }
   | {
@@ -110,26 +112,7 @@ function App() {
               : false,
           contentRender: (content: string, info: { extraInfo?: { streaming?: boolean } }) =>
             info?.extraInfo?.streaming ? content : <XMarkdown content={content} />,
-          footer: (_content: string, info: { extraInfo?: { streaming?: boolean; trace?: TraceEntry[] } }) => {
-            const trace = info?.extraInfo?.trace || [];
-            const toolSteps = trace.filter((item) => item.type === "tool").map((item) => item.text);
-
-            if (toolSteps.length === 0) {
-              return null;
-            }
-
-            return (
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Think title="工具调用过程" defaultExpanded={false}>
-                  <ol style={{ margin: 0, paddingLeft: 18 }}>
-                    {toolSteps.map((step, idx) => (
-                      <li key={`tool-${idx}`}>{step}</li>
-                    ))}
-                  </ol>
-                </Think>
-              </Space>
-            );
-          },
+          footer: () => null,
         },
         user: { placement: "end", variant: "filled" },
       } as const),
@@ -242,7 +225,7 @@ function App() {
                       item.key === aiKey
                         ? {
                             ...item,
-                            content: buildAiContent(event.reply || "", true),
+                            content: buildAiContent(event.rendered || event.reply || "", true),
                             status: "loading",
                             extraInfo: { streaming: true, trace: event.trace || [] },
                           }
@@ -291,7 +274,7 @@ function App() {
                   item.key === aiKey
                     ? {
                         ...item,
-                        content: buildAiContent(data.reply || "", false),
+                        content: buildAiContent(data.rendered || data.reply || "", false),
                         status: "success",
                         extraInfo: { streaming: false, trace: data.trace || [] },
                       }

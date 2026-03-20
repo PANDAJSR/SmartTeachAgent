@@ -1,5 +1,6 @@
 type ChatResponse = {
   reply?: string;
+  rendered?: string;
   error?: string;
   meta?: unknown;
   trace?: Array<{
@@ -12,6 +13,7 @@ type ChatStreamEvent =
   | {
       type: "snapshot";
       reply: string;
+      rendered: string;
       trace: Array<{
         type: "tool" | "thinking";
         text: string;
