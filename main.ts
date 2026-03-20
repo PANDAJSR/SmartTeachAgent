@@ -16,10 +16,22 @@ type TraceEntry = {
   text: string;
 };
 
-type ContentSegment = {
-  type: "text" | "tool";
+type ToolStatus = "pending" | "running" | "completed" | "failed" | "stopped";
+
+type TextSegment = {
+  type: "text";
   text: string;
 };
+
+type ToolSegment = {
+  type: "tool";
+  text: string;
+  toolName?: string;
+  toolUseId?: string;
+  status?: ToolStatus;
+};
+
+type ContentSegment = TextSegment | ToolSegment;
 
 type ChatProgressSnapshot = {
   reply: string;
@@ -75,16 +87,71 @@ function appendTrace(trace: TraceEntry[], type: TraceEntry["type"], delta: strin
   trace.push({ type, text: delta });
 }
 
-function pushToolSegment(segments: ContentSegment[], text: string): void {
-  const clean = text.trim();
+function findLatestToolSegmentIndex(
+  segments: ContentSegment[],
+  toolUseId?: string,
+  toolName?: string
+): number {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment.type !== "tool") {
+      continue;
+    }
+    if (toolUseId && segment.toolUseId === toolUseId) {
+      return index;
+    }
+    if (!toolUseId && toolName && segment.toolName === toolName) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function upsertToolSegment(
+  segments: ContentSegment[],
+  payload: {
+    text: string;
+    toolUseId?: string;
+    toolName?: string;
+    status?: ToolStatus;
+  }
+): void {
+  const clean = payload.text.trim();
   if (!clean) {
     return;
   }
-  const prev = segments[segments.length - 1];
-  if (prev && prev.type === "tool" && prev.text === clean) {
+  const idx = findLatestToolSegmentIndex(segments, payload.toolUseId, payload.toolName);
+  if (idx >= 0) {
+    const prev = segments[idx];
+    if (prev.type !== "tool") {
+      return;
+    }
+    segments[idx] = {
+      ...prev,
+      text: clean,
+      toolName: payload.toolName || prev.toolName,
+      toolUseId: payload.toolUseId || prev.toolUseId,
+      status: payload.status || prev.status,
+    };
     return;
   }
-  segments.push({ type: "tool", text: clean });
+  const prev = segments[segments.length - 1];
+  if (
+    prev &&
+    prev.type === "tool" &&
+    prev.text === clean &&
+    prev.toolName === payload.toolName &&
+    prev.status === payload.status
+  ) {
+    return;
+  }
+  segments.push({
+    type: "tool",
+    text: clean,
+    toolName: payload.toolName,
+    toolUseId: payload.toolUseId,
+    status: payload.status,
+  });
 }
 
 function appendTextSegment(segments: ContentSegment[], delta: string): void {
@@ -171,8 +238,15 @@ async function runClaudeChat(
           if (block.type === "tool_use") {
             const inputPreview = toPreview(block.input);
             const text = `准备调用工具 ${block.name}${inputPreview ? `，参数：${inputPreview}` : ""}`;
+            const toolUseId =
+              "id" in block && typeof block.id === "string" ? block.id : undefined;
             pushTrace(trace, "tool", text);
-            pushToolSegment(segments, text);
+            upsertToolSegment(segments, {
+              text,
+              toolName: block.name,
+              toolUseId,
+              status: "pending",
+            });
             emitProgress();
             continue;
           }
@@ -192,14 +266,31 @@ async function runClaudeChat(
     if (sdkMessage.type === "tool_progress") {
       const text = `工具 ${sdkMessage.tool_name} 执行中（${Math.round(sdkMessage.elapsed_time_seconds)}s）`;
       pushTrace(trace, "tool", text);
-      pushToolSegment(segments, text);
+      upsertToolSegment(segments, {
+        text,
+        toolName: sdkMessage.tool_name,
+        toolUseId: sdkMessage.tool_use_id,
+        status: "running",
+      });
       emitProgress();
       continue;
     }
 
     if (sdkMessage.type === "tool_use_summary") {
       pushTrace(trace, "tool", sdkMessage.summary);
-      pushToolSegment(segments, sdkMessage.summary);
+      const summaryIds = sdkMessage.preceding_tool_use_ids || [];
+      if (summaryIds.length === 1) {
+        upsertToolSegment(segments, {
+          text: sdkMessage.summary,
+          toolUseId: summaryIds[0],
+          status: "completed",
+        });
+      } else {
+        upsertToolSegment(segments, {
+          text: sdkMessage.summary,
+          status: "completed",
+        });
+      }
       emitProgress();
       continue;
     }
@@ -208,19 +299,28 @@ async function runClaudeChat(
       if (sdkMessage.subtype === "task_started") {
         const text = `任务开始：${sdkMessage.description}`;
         pushTrace(trace, "tool", text);
-        pushToolSegment(segments, text);
+        upsertToolSegment(segments, { text, toolUseId: sdkMessage.tool_use_id, status: "pending" });
         emitProgress();
       }
       if (sdkMessage.subtype === "task_progress") {
         const text = `任务进度：${sdkMessage.description}`;
         pushTrace(trace, "tool", text);
-        pushToolSegment(segments, text);
+        upsertToolSegment(segments, { text, toolUseId: sdkMessage.tool_use_id, status: "running" });
         emitProgress();
       }
       if (sdkMessage.subtype === "task_notification") {
         const text = `任务${sdkMessage.status}：${sdkMessage.summary}`;
+        const statusMap: Record<"completed" | "failed" | "stopped", ToolStatus> = {
+          completed: "completed",
+          failed: "failed",
+          stopped: "stopped",
+        };
         pushTrace(trace, "tool", text);
-        pushToolSegment(segments, text);
+        upsertToolSegment(segments, {
+          text,
+          toolUseId: sdkMessage.tool_use_id,
+          status: statusMap[sdkMessage.status],
+        });
         emitProgress();
       }
       continue;

@@ -1,6 +1,9 @@
 type ContentSegment = {
   type: "text" | "tool";
   text: string;
+  toolName?: string;
+  toolUseId?: string;
+  status?: "pending" | "running" | "completed" | "failed" | "stopped";
 };
 
 type ChatResponse = {

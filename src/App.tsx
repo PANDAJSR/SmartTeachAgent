@@ -26,6 +26,9 @@ type TraceEntry = {
 type ContentSegment = {
   type: "text" | "tool";
   text: string;
+  toolName?: string;
+  toolUseId?: string;
+  status?: "pending" | "running" | "completed" | "failed" | "stopped";
 };
 
 type ChatResponse = {
@@ -108,6 +111,21 @@ const renderToolText = (text: string) => {
   return <XMarkdown content={formatted} />;
 };
 
+const getToolTitle = (segment: ContentSegment): string => {
+  const toolName = segment.toolName || "工具调用";
+  const statusMap: Record<NonNullable<ContentSegment["status"]>, string> = {
+    pending: "待执行",
+    running: "进行中",
+    completed: "已完成",
+    failed: "失败",
+    stopped: "已停止",
+  };
+  if (!segment.status) {
+    return toolName;
+  }
+  return `${toolName} · ${statusMap[segment.status]}`;
+};
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -134,8 +152,8 @@ function App() {
                     segment.type === "tool" ? (
                       <Think
                         key={`segment-tool-${index}`}
-                        title="工具调用"
-                        defaultExpanded
+                        title={getToolTitle(segment)}
+                        defaultExpanded={segment.status === "pending" || segment.status === "running"}
                         styles={{ content: { marginTop: 8 } }}
                       >
                         {renderToolText(segment.text)}
