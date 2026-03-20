@@ -26,7 +26,7 @@ function App() {
       ai: {
         placement: "start",
         variant: "borderless",
-        contentRender: (content: string) => <XMarkdown>{content}</XMarkdown>,
+        contentRender: (content: string) => <XMarkdown content={content} />,
       },
       user: { placement: "end", variant: "filled" },
     } as const),
