@@ -5,3 +5,6 @@
 1. 使用中文编写清晰的 commit message。
 2. 完成 commit。
 3. 及时 push 到远程仓库对应分支。
+
+# 前端使用 Ant Design X 作为对话界面库
+- 必要时查官方文档
