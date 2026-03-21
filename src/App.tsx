@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Actions, Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Button, Card, Space, Tooltip, Typography } from "antd";
+import { Button, Card, Select, Space, Tooltip, Typography } from "antd";
 import SettingsModal from "./components/SettingsModal";
 
 type Role = "user" | "ai";
@@ -103,7 +103,22 @@ type McpTestResult = {
 };
 
 const MAX_HISTORY_TURNS = 24;
-const ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-tiny";
+const DEFAULT_ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-base";
+const ASR_MODEL_OPTIONS = [
+  {
+    label: "极速（中文）",
+    value: "Xenova/whisper-tiny",
+  },
+  {
+    label: "均衡（中文，推荐）",
+    value: "Xenova/whisper-base",
+  },
+  {
+    label: "高准确（中文）",
+    value: "Xenova/whisper-small",
+  },
+] as const;
+const ASR_MODEL_SELECT_OPTIONS: { label: string; value: string }[] = [...ASR_MODEL_OPTIONS];
 
 type AsrResult = {
   text?: string;
@@ -230,10 +245,13 @@ function App() {
   const [recording, setRecording] = useState<boolean>(false);
   const [transcribing, setTranscribing] = useState<boolean>(false);
   const [asrError, setAsrError] = useState<string>("");
+  const [asrModelId, setAsrModelId] = useState<string>(DEFAULT_ASR_MODEL_ID);
+  const [asrPreloading, setAsrPreloading] = useState<boolean>(false);
+  const [asrReadyMap, setAsrReadyMap] = useState<Record<string, boolean>>({});
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const asrPipelineRef = useRef<AsrPipeline | null>(null);
+  const asrPipelineRef = useRef<{ modelId: string; pipeline: AsrPipeline } | null>(null);
   const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
 
   const roles = useMemo(
@@ -835,9 +853,9 @@ function App() {
     }
   };
 
-  const ensureAsrPipeline = async (): Promise<AsrPipeline> => {
-    if (asrPipelineRef.current) {
-      return asrPipelineRef.current;
+  const ensureAsrPipeline = async (modelId: string): Promise<AsrPipeline> => {
+    if (asrPipelineRef.current?.modelId === modelId) {
+      return asrPipelineRef.current.pipeline;
     }
     if (asrPipelineLoadingRef.current) {
       return asrPipelineLoadingRef.current;
@@ -848,9 +866,10 @@ function App() {
       const createPipeline = pipeline as (...args: unknown[]) => Promise<unknown>;
       const transcriber = (await createPipeline(
         "automatic-speech-recognition",
-        ASR_MODEL_ID
+        modelId
       )) as AsrPipeline;
-      asrPipelineRef.current = transcriber;
+      asrPipelineRef.current = { modelId, pipeline: transcriber };
+      setAsrReadyMap((prev) => ({ ...prev, [modelId]: true }));
       return transcriber;
     })();
     asrPipelineLoadingRef.current = loadingTask;
@@ -903,7 +922,7 @@ function App() {
     setTranscribing(true);
     setAsrError("");
     try {
-      const [transcriber, audio] = await Promise.all([ensureAsrPipeline(), decodeAudioBlob(blob)]);
+      const [transcriber, audio] = await Promise.all([ensureAsrPipeline(asrModelId), decodeAudioBlob(blob)]);
       const result = await transcriber(audio, { language: "zh", task: "transcribe" });
       const text = String(result?.text || "").trim();
       if (!text) {
@@ -985,6 +1004,26 @@ function App() {
     }
     void startRecording();
   };
+
+  const preloadAsrModel = async (): Promise<void> => {
+    if (asrPreloading || transcribing || recording || loading) {
+      return;
+    }
+    setAsrPreloading(true);
+    setAsrError("");
+    try {
+      await ensureAsrPipeline(asrModelId);
+    } catch (error) {
+      setAsrError(error instanceof Error ? error.message : "模型预加载失败");
+    } finally {
+      setAsrPreloading(false);
+    }
+  };
+
+  const asrModelLabel = useMemo(() => {
+    const matched = ASR_MODEL_OPTIONS.find((item) => item.value === asrModelId);
+    return matched?.label || asrModelId;
+  }, [asrModelId]);
 
   useEffect(() => {
     return () => {
@@ -1088,13 +1127,31 @@ function App() {
                   </Space>
                 )}
               />
+              <Space size={8} wrap>
+                <Select
+                  value={asrModelId}
+                  options={ASR_MODEL_SELECT_OPTIONS}
+                  style={{ minWidth: 210 }}
+                  size="small"
+                  onChange={(value) => setAsrModelId(String(value))}
+                  disabled={recording || transcribing || loading || asrPreloading}
+                />
+                <Button
+                  size="small"
+                  onClick={() => void preloadAsrModel()}
+                  loading={asrPreloading}
+                  disabled={recording || transcribing || loading || asrPreloading}
+                >
+                  {asrReadyMap[asrModelId] ? "模型已就绪" : "预加载语音模型"}
+                </Button>
+              </Space>
               {(recording || transcribing || asrError) && (
                 <Typography.Text type={asrError ? "danger" : "secondary"}>
                   {asrError
                     ? `语音输入失败：${asrError}`
                     : recording
                       ? "录音中，点击麦克风按钮结束并开始识别..."
-                      : `正在加载并运行语音识别模型（${ASR_MODEL_ID}）...`}
+                      : `正在加载并运行语音识别模型（${asrModelLabel}）...`}
                 </Typography.Text>
               )}
             </Space>
