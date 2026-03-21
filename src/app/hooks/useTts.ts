@@ -139,6 +139,7 @@ export function useTts(): UseTtsResult {
       if (synthesizeSpeechStream) {
         const streamChunks: Uint8Array[] = [];
         let firstChunkReceived = false;
+        let streamStopped = false;
         console.info(`[TTS][${requestId}] 使用流式合成`);
 
         const streamResult = await synthesizeSpeechStream(
@@ -165,6 +166,9 @@ export function useTts(): UseTtsResult {
             }
             if (event.type === "done" || event.type === "stopped") {
               console.info(`[TTS][${requestId}] 流结束，type=${event.type}`);
+              if (event.type === "stopped") {
+                streamStopped = true;
+              }
               setTtsGenerating(false);
               return;
             }
@@ -187,6 +191,21 @@ export function useTts(): UseTtsResult {
 
         console.info(`[TTS][${requestId}] 流式合成完成，chunkCount=${streamChunks.length}`);
         setTtsGenerating(false);
+        if (!streamChunks.length) {
+          const synthesizeSpeech = window.smartTeach?.synthesizeSpeech;
+          if (!synthesizeSpeech) {
+            throw new Error("流式未返回音频分片，且当前环境不支持非流式兜底");
+          }
+          console.warn(
+            `[TTS][${requestId}] 流式未收到音频分片，自动回退非流式，stopped=${streamStopped}`
+          );
+          const fallbackResult = await synthesizeSpeech({ text: clean, voice: DEFAULT_EDGE_TTS_VOICE });
+          if (!fallbackResult.ok) {
+            throw new Error(fallbackResult.error || "语音合成失败");
+          }
+          await playChunksAsMp3([decodeBase64ToUint8Array(fallbackResult.audioBase64)], requestId);
+          return;
+        }
         await playChunksAsMp3(streamChunks, requestId);
         return;
       }
