@@ -136,7 +136,7 @@ export function useTts(): UseTtsResult {
       ttsMediaSourceRef.current = mediaSource;
       const objectUrl = URL.createObjectURL(mediaSource);
       ttsAudioUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
+      const audio = new Audio();
       ttsAudioRef.current = audio;
 
       console.info(`[TTS][${requestId}] 等待 MediaSource sourceopen`);
@@ -145,29 +145,35 @@ export function useTts(): UseTtsResult {
         const timeout = window.setTimeout(() => {
           reject(new Error(`音频缓冲初始化超时（${sourceOpenTimeoutMs}ms）`));
         }, sourceOpenTimeoutMs);
+        const onSourceOpen = () => {
+          try {
+            window.clearTimeout(timeout);
+            console.info(`[TTS][${requestId}] MediaSource sourceopen`);
+            const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+            sourceBuffer.mode = "sequence";
+            sourceBuffer.addEventListener("updateend", () => pumpTtsQueue());
+            sourceBuffer.addEventListener("error", () => {
+              setTtsError("音频流缓冲失败");
+              stopTtsPlayback();
+            });
+            ttsSourceBufferRef.current = sourceBuffer;
+            resolve();
+          } catch (error) {
+            window.clearTimeout(timeout);
+            reject(error);
+          }
+        };
         mediaSource.addEventListener(
           "sourceopen",
-          () => {
-            try {
-              window.clearTimeout(timeout);
-              console.info(`[TTS][${requestId}] MediaSource sourceopen`);
-              const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-              sourceBuffer.mode = "sequence";
-              sourceBuffer.addEventListener("updateend", () => pumpTtsQueue());
-              sourceBuffer.addEventListener("error", () => {
-                setTtsError("音频流缓冲失败");
-                stopTtsPlayback();
-              });
-              ttsSourceBufferRef.current = sourceBuffer;
-              resolve();
-            } catch (error) {
-              window.clearTimeout(timeout);
-              reject(error);
-            }
-          },
+          onSourceOpen,
           { once: true }
         );
+        // 先挂 sourceopen 监听，再设置 src，避免事件早到导致漏监听
+        audio.src = objectUrl;
         audio.load();
+        if (mediaSource.readyState === "open") {
+          onSourceOpen();
+        }
       });
 
       audio.onended = () => {
