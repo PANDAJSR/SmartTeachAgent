@@ -104,14 +104,7 @@ type McpTestResult = {
 
 const MAX_HISTORY_TURNS = 24;
 const DEFAULT_ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-base";
-const DEFAULT_TTS_MODEL_ID =
-  import.meta.env.VITE_TTS_MODEL_ID || "onnx-community/Kokoro-82M-v1.0-ONNX";
-const DEFAULT_TTS_SPEAKER_EMBEDDINGS_URL =
-  import.meta.env.VITE_TTS_SPEAKER_EMBEDDINGS_URL ||
-  "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/zf_xiaobei.bin";
-const TTS_FALLBACK_MODELS = [
-  "onnx-community/Supertonic-TTS-ONNX",
-] as const;
+const DEFAULT_EDGE_TTS_VOICE = import.meta.env.VITE_EDGE_TTS_VOICE || "zh-CN-XiaoxiaoNeural";
 const ASR_MODEL_OPTIONS = [
   {
     label: "极速（中文）",
@@ -134,25 +127,6 @@ type AsrResult = {
 
 type AsrPipeline = (audio: Float32Array, options?: Record<string, unknown>) => Promise<AsrResult>;
 type ChineseConverter = (input: string) => string;
-type TtsResult = {
-  toBlob: () => Blob;
-};
-type TtsPipeline = (text: string, options?: Record<string, unknown>) => Promise<TtsResult>;
-
-const getTtsSynthesisOptions = (modelId: string): Record<string, unknown> => {
-  if (modelId === "onnx-community/Kokoro-82M-v1.0-ONNX") {
-    return {
-      speaker_embeddings: DEFAULT_TTS_SPEAKER_EMBEDDINGS_URL,
-    };
-  }
-  if (modelId === "onnx-community/Supertonic-TTS-ONNX") {
-    return {
-      speaker_embeddings:
-        "https://huggingface.co/onnx-community/Supertonic-TTS-ONNX/resolve/main/voices/F1.bin",
-    };
-  }
-  return {};
-};
 
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
@@ -284,8 +258,6 @@ function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const asrPipelineRef = useRef<{ modelId: string; pipeline: AsrPipeline } | null>(null);
   const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
-  const ttsPipelineRef = useRef<{ modelId: string; pipeline: TtsPipeline } | null>(null);
-  const ttsPipelineLoadingRef = useRef<Promise<TtsPipeline> | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioUrlRef = useRef<string | null>(null);
   const zhSimplifierRef = useRef<ChineseConverter | null>(null);
@@ -965,27 +937,13 @@ function App() {
     }
   };
 
-  const ensureTtsPipeline = async (modelId: string): Promise<TtsPipeline> => {
-    if (ttsPipelineRef.current?.modelId === modelId) {
-      return ttsPipelineRef.current.pipeline;
+  const createObjectUrlFromBase64 = (audioBase64: string, mimeType: string): string => {
+    const binary = window.atob(audioBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
     }
-    if (ttsPipelineLoadingRef.current) {
-      return ttsPipelineLoadingRef.current;
-    }
-    const loadingTask = (async () => {
-      const { env, pipeline } = await import("@huggingface/transformers");
-      env.allowLocalModels = false;
-      const createPipeline = pipeline as (...args: unknown[]) => Promise<unknown>;
-      const synthesizer = (await createPipeline("text-to-speech", modelId)) as TtsPipeline;
-      ttsPipelineRef.current = { modelId, pipeline: synthesizer };
-      return synthesizer;
-    })();
-    ttsPipelineLoadingRef.current = loadingTask;
-    try {
-      return await loadingTask;
-    } finally {
-      ttsPipelineLoadingRef.current = null;
-    }
+    return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
   };
 
   const resetTtsAudioSource = (): void => {
@@ -1022,24 +980,18 @@ function App() {
     stopTtsPlayback();
     setTtsGenerating(true);
     try {
-      const modelCandidates = Array.from(new Set([DEFAULT_TTS_MODEL_ID, ...TTS_FALLBACK_MODELS]));
-      let output: TtsResult | null = null;
-      let lastError: unknown = null;
-      for (const modelId of modelCandidates) {
-        try {
-          const synthesizer = await ensureTtsPipeline(modelId);
-          const ttsOptions = getTtsSynthesisOptions(modelId);
-          output = await synthesizer(clean, ttsOptions);
-          lastError = null;
-          break;
-        } catch (error) {
-          lastError = error;
-        }
+      const synthesizeSpeech = window.smartTeach?.synthesizeSpeech;
+      if (!synthesizeSpeech) {
+        throw new Error("当前模式不支持 Edge TTS，请在 Electron 客户端中使用。");
       }
-      if (!output) {
-        throw lastError instanceof Error ? lastError : new Error("语音模型不可用");
+      const ttsResult = await synthesizeSpeech({
+        text: clean,
+        voice: DEFAULT_EDGE_TTS_VOICE,
+      });
+      if (!ttsResult.ok) {
+        throw new Error(ttsResult.error || "语音合成失败");
       }
-      const objectUrl = URL.createObjectURL(output.toBlob());
+      const objectUrl = createObjectUrlFromBase64(ttsResult.audioBase64, ttsResult.mimeType);
       ttsAudioUrlRef.current = objectUrl;
       const audio = new Audio(objectUrl);
       audio.onended = () => {

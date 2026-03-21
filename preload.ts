@@ -100,4 +100,24 @@ contextBridge.exposeInMainWorld("smartTeach", {
       message: string;
     }>;
   },
+  synthesizeSpeech: async (payload: {
+    text: string;
+    voice?: string;
+    rate?: string;
+    pitch?: string;
+    volume?: string;
+  }) => {
+    return ipcRenderer.invoke("tts:synthesize", payload) as Promise<
+      | {
+          ok: true;
+          mimeType: "audio/mpeg";
+          audioBase64: string;
+          voice: string;
+        }
+      | {
+          ok: false;
+          error: string;
+        }
+    >;
+  },
 });

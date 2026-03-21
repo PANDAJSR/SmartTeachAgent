@@ -84,6 +84,24 @@ declare global {
         status: number | null;
         message: string;
       }>;
+      synthesizeSpeech?: (payload: {
+        text: string;
+        voice?: string;
+        rate?: string;
+        pitch?: string;
+        volume?: string;
+      }) => Promise<
+        | {
+            ok: true;
+            mimeType: "audio/mpeg";
+            audioBase64: string;
+            voice: string;
+          }
+        | {
+            ok: false;
+            error: string;
+          }
+      >;
     };
   }
 }

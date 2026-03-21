@@ -56,6 +56,14 @@ type ChatHistoryTurn = {
   content: string;
 };
 
+type EdgeTtsPayload = {
+  text?: string;
+  voice?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
+};
+
 type AppConfig = {
   mcp: {
     httpServers: Array<{
@@ -147,6 +155,55 @@ async function writeAppConfig(config: unknown): Promise<AppConfig> {
   await fs.mkdir(path.dirname(configFilePath), { recursive: true });
   await fs.writeFile(configFilePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
   return normalized;
+}
+
+async function synthesizeWithEdgeTts(payload?: EdgeTtsPayload): Promise<{
+  ok: true;
+  mimeType: "audio/mpeg";
+  audioBase64: string;
+  voice: string;
+}> {
+  const text = String(payload?.text || "").trim();
+  if (!text) {
+    throw new Error("text 不能为空");
+  }
+  const voice = String(payload?.voice || process.env.EDGE_TTS_VOICE || "zh-CN-XiaoxiaoNeural").trim();
+  const rate = String(payload?.rate || process.env.EDGE_TTS_RATE || "default").trim();
+  const pitch = String(payload?.pitch || process.env.EDGE_TTS_PITCH || "default").trim();
+  const volume = String(payload?.volume || process.env.EDGE_TTS_VOLUME || "default").trim();
+
+  const { EdgeTTS } = await import("node-edge-tts");
+  const tts = new EdgeTTS({
+    voice,
+    lang: "zh-CN",
+    outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+    rate,
+    pitch,
+    volume,
+    timeout: 15000,
+  });
+
+  const ttsDir = path.join(app.getPath("temp"), "smartteachagent-tts");
+  await fs.mkdir(ttsDir, { recursive: true });
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`;
+  const filepath = path.join(ttsDir, filename);
+
+  try {
+    await tts.ttsPromise(text, filepath);
+    const audioBuffer = await fs.readFile(filepath);
+    return {
+      ok: true,
+      mimeType: "audio/mpeg",
+      audioBase64: audioBuffer.toString("base64"),
+      voice,
+    };
+  } finally {
+    try {
+      await fs.unlink(filepath);
+    } catch {
+      // ignore cleanup errors
+    }
+  }
 }
 
 function buildMcpServers(config: AppConfig): Record<string, { type: "http"; url: string; headers?: Record<string, string> }> {
@@ -999,6 +1056,21 @@ ipcMain.handle(
     return result;
   }
 );
+
+ipcMain.handle("tts:synthesize", async (_event, payload?: EdgeTtsPayload) => {
+  logInfo(`[tts:synthesize] 收到请求 textLength=${String(payload?.text || "").trim().length}`);
+  try {
+    const result = await synthesizeWithEdgeTts(payload);
+    logInfo(`[tts:synthesize] 生成成功 voice=${result.voice} bytes=${result.audioBase64.length}`);
+    return result;
+  } catch (error) {
+    logError("[tts:synthesize] 生成失败", error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "语音合成失败",
+    };
+  }
+});
 
 function createWindow(): void {
   const win = new BrowserWindow({
