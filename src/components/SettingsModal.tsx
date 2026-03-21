@@ -68,8 +68,8 @@ function SettingsModal(props: SettingsModalProps) {
       open={open}
       className="settings-modal"
       wrapClassName="settings-modal-wrap"
-      width="100vw"
-      style={{ top: 0, margin: 0, paddingBottom: 0 }}
+      width="100%"
+      style={{ top: 0, margin: 0, paddingBottom: 0, maxWidth: "100vw" }}
       onCancel={onClose}
       footer={[
         <Button key="close" onClick={onClose}>
