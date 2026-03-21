@@ -96,6 +96,9 @@ export function useTts(): UseTtsResult {
     if (audio) {
       audio.onended = null;
       audio.onerror = null;
+      if (audio.parentElement) {
+        audio.parentElement.removeChild(audio);
+      }
       audio.src = "";
       ttsAudioRef.current = null;
     }
@@ -136,7 +139,10 @@ export function useTts(): UseTtsResult {
       ttsMediaSourceRef.current = mediaSource;
       const objectUrl = URL.createObjectURL(mediaSource);
       ttsAudioUrlRef.current = objectUrl;
-      const audio = new Audio();
+      const audio = document.createElement("audio");
+      audio.preload = "auto";
+      audio.style.display = "none";
+      document.body.appendChild(audio);
       ttsAudioRef.current = audio;
 
       console.info(`[TTS][${requestId}] 等待 MediaSource sourceopen`);
