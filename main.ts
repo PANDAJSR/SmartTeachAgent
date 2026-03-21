@@ -1,7 +1,8 @@
-import "dotenv/config";
-
 import { app, BrowserWindow, ipcMain } from "electron";
+import { promises as fs } from "fs";
+import os from "os";
 import path from "path";
+import dotenv from "dotenv";
 import { buildClaudeOptions } from "./backend/claudeOptions";
 
 type ChatMeta = {
@@ -51,6 +52,8 @@ type ChatResult = {
 };
 
 const activeAbortControllers = new Map<string, AbortController>();
+const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
+dotenv.config({ path: envFilePath });
 
 function toPreview(value: unknown): string {
   try {
@@ -291,7 +294,7 @@ async function runClaudeChat(
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("缺少 ANTHROPIC_API_KEY，请先在 .env 中配置后重试");
+    throw new Error(`缺少 ANTHROPIC_API_KEY，请先在 ${envFilePath} 中配置后重试`);
   }
 
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -584,6 +587,28 @@ ipcMain.handle("chat:stop", async (_event, payload?: { requestId?: string }) => 
   }
   controller.abort();
   return { ok: true };
+});
+
+ipcMain.handle("env-file:get-path", async () => envFilePath);
+
+ipcMain.handle("env-file:read", async () => {
+  try {
+    const content = await fs.readFile(envFilePath, "utf-8");
+    return { path: envFilePath, content };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { path: envFilePath, content: "" };
+    }
+    throw error;
+  }
+});
+
+ipcMain.handle("env-file:write", async (_event, payload?: { content?: string }) => {
+  const content = typeof payload?.content === "string" ? payload.content : "";
+  await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+  await fs.writeFile(envFilePath, content, "utf-8");
+  dotenv.config({ path: envFilePath, override: true });
+  return { ok: true, path: envFilePath };
 });
 
 function createWindow(): void {

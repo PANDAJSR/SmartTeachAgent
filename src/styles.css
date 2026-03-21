@@ -62,6 +62,13 @@ body {
   gap: 4px;
 }
 
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .chat-window {
   height: 56vh;
   min-height: 360px;
@@ -100,5 +107,10 @@ body {
   .chat-window {
     height: 52vh;
     min-height: 300px;
+  }
+
+  .header-top {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

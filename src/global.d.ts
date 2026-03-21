@@ -51,6 +51,9 @@ declare global {
         onEvent: (event: ChatStreamEvent) => void
       ) => Promise<ChatResponse>;
       stopChat?: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
+      getEnvFilePath?: () => Promise<string>;
+      readEnvFile?: () => Promise<{ path: string; content: string }>;
+      writeEnvFile?: (content: string) => Promise<{ ok: boolean; path: string }>;
     };
   }
 }

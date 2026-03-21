@@ -1,11 +1,14 @@
-import "dotenv/config";
-
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
+import os from "os";
+import path from "path";
+import dotenv from "dotenv";
 import { buildClaudeOptions } from "./claudeOptions";
 
 const app = express();
+const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
+dotenv.config({ path: envFilePath });
 const port = Number(process.env.PORT || 3001);
 
 app.use(cors());
@@ -269,7 +272,7 @@ app.post(
 
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({
-        error: "缺少 ANTHROPIC_API_KEY，请先在 .env 中配置后重试",
+        error: `缺少 ANTHROPIC_API_KEY，请先在 ${envFilePath} 中配置后重试`,
       });
     }
 

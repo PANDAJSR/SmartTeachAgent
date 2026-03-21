@@ -53,4 +53,13 @@ contextBridge.exposeInMainWorld("smartTeach", {
   stopChat: async (requestId: string) => {
     return ipcRenderer.invoke("chat:stop", { requestId });
   },
+  getEnvFilePath: async () => {
+    return ipcRenderer.invoke("env-file:get-path") as Promise<string>;
+  },
+  readEnvFile: async () => {
+    return ipcRenderer.invoke("env-file:read") as Promise<{ path: string; content: string }>;
+  },
+  writeEnvFile: async (content: string) => {
+    return ipcRenderer.invoke("env-file:write", { content }) as Promise<{ ok: boolean; path: string }>;
+  },
 });

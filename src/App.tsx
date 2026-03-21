@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Card, Space, Typography } from "antd";
+import Editor from "@monaco-editor/react";
+import { Button, Card, Modal, Space, Typography } from "antd";
 
 type Role = "user" | "ai";
 
@@ -140,6 +141,13 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string>(initialConversation.id);
   const activeRequestIdRef = useRef<string | null>(null);
   const [collapsedToolKeys, setCollapsedToolKeys] = useState<string[]>([]);
+  const [envEditorOpen, setEnvEditorOpen] = useState<boolean>(false);
+  const [envEditorLoading, setEnvEditorLoading] = useState<boolean>(false);
+  const [envEditorSaving, setEnvEditorSaving] = useState<boolean>(false);
+  const [envEditorError, setEnvEditorError] = useState<string>("");
+  const [envEditorNotice, setEnvEditorNotice] = useState<string>("");
+  const [envFilePath, setEnvFilePath] = useState<string>("~/SmartTeachAgent/.env");
+  const [envFileContent, setEnvFileContent] = useState<string>("");
 
   const roles = useMemo(
     () =>
@@ -442,6 +450,52 @@ function App() {
     }
   };
 
+  const openEnvEditor = async (): Promise<void> => {
+    setEnvEditorOpen(true);
+    setEnvEditorLoading(true);
+    setEnvEditorError("");
+    setEnvEditorNotice("");
+    try {
+      const readEnvFile = window.smartTeach?.readEnvFile;
+      const getEnvFilePath = window.smartTeach?.getEnvFilePath;
+      if (!readEnvFile) {
+        const path = (await getEnvFilePath?.()) || "~/SmartTeachAgent/.env";
+        setEnvFilePath(path);
+        setEnvFileContent("");
+        setEnvEditorError("当前模式不支持直接编辑，请在 Electron 客户端中使用此功能。");
+        return;
+      }
+      const data = await readEnvFile();
+      setEnvFilePath(data.path);
+      setEnvFileContent(data.content);
+    } catch (error) {
+      setEnvEditorError(error instanceof Error ? error.message : "读取 .env 文件失败");
+      setEnvFileContent("");
+    } finally {
+      setEnvEditorLoading(false);
+    }
+  };
+
+  const saveEnvFile = async (): Promise<void> => {
+    const writeEnvFile = window.smartTeach?.writeEnvFile;
+    if (!writeEnvFile) {
+      setEnvEditorError("当前模式不支持直接保存，请在 Electron 客户端中使用此功能。");
+      return;
+    }
+    setEnvEditorSaving(true);
+    setEnvEditorError("");
+    setEnvEditorNotice("");
+    try {
+      const result = await writeEnvFile(envFileContent);
+      setEnvFilePath(result.path);
+      setEnvEditorNotice(`保存成功：${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
+    } catch (error) {
+      setEnvEditorError(error instanceof Error ? error.message : "保存 .env 文件失败");
+    } finally {
+      setEnvEditorSaving(false);
+    }
+  };
+
   return (
     <main className="page">
       <Card className="chat-card" variant="borderless">
@@ -468,9 +522,14 @@ function App() {
           <section className="chat-panel">
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <div className="header">
-                <Typography.Title level={3} style={{ margin: 0 }}>
-                  智教助手
-                </Typography.Title>
+                <div className="header-top">
+                  <Typography.Title level={3} style={{ margin: 0 }}>
+                    智教助手
+                  </Typography.Title>
+                  <Button onClick={() => void openEnvEditor()} disabled={loading}>
+                    编辑 .env
+                  </Button>
+                </div>
                 <Typography.Text type="secondary">
                   前端：Ant Design X ｜ 后端：Claude Agent SDK
                 </Typography.Text>
@@ -499,6 +558,47 @@ function App() {
           </section>
         </div>
       </Card>
+      <Modal
+        title="编辑环境变量 .env"
+        open={envEditorOpen}
+        width={960}
+        onCancel={() => setEnvEditorOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setEnvEditorOpen(false)}>
+            关闭
+          </Button>,
+          <Button
+            key="save"
+            type="primary"
+            loading={envEditorSaving}
+            onClick={() => void saveEnvFile()}
+            disabled={envEditorLoading}
+          >
+            保存
+          </Button>,
+        ]}
+      >
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Typography.Text type="secondary">{envFilePath}</Typography.Text>
+          {envEditorError ? <Typography.Text type="danger">{envEditorError}</Typography.Text> : null}
+          {envEditorNotice ? <Typography.Text type="success">{envEditorNotice}</Typography.Text> : null}
+          <Editor
+            height="55vh"
+            defaultLanguage="ini"
+            value={envFileContent}
+            loading="正在加载 .env 文件..."
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              wordWrap: "on",
+              automaticLayout: true,
+              lineNumbers: "on",
+              scrollBeyondLastLine: false,
+            }}
+            onChange={(value) => setEnvFileContent(value || "")}
+          />
+        </Space>
+      </Modal>
     </main>
   );
 }
