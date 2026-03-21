@@ -115,10 +115,21 @@ body {
   flex-direction: column;
 }
 
+.settings-modal .ant-modal-header {
+  margin-bottom: 0;
+  padding: 20px 24px 12px;
+}
+
 .settings-modal .ant-modal-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 12px 24px 20px;
+}
+
+.settings-modal .ant-modal-footer {
+  margin-top: 0;
+  padding: 12px 24px 20px;
 }
 
 .mcp-server-item {
