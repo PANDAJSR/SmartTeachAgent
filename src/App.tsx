@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Card, Space, Typography } from "antd";
@@ -129,6 +129,9 @@ const getToolTitle = (segment: ContentSegment): string => {
   return `${toolName} · ${statusMap[segment.status]}`;
 };
 
+const getToolSegmentKey = (segment: ContentSegment, index: number): string =>
+  segment.toolUseId || `${segment.toolName || "tool"}-${index}-${segment.text.slice(0, 20)}`;
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -136,6 +139,7 @@ function App() {
   const [conversations, setConversations] = useState<Conversation[]>([initialConversation]);
   const [activeConversationId, setActiveConversationId] = useState<string>(initialConversation.id);
   const activeRequestIdRef = useRef<string | null>(null);
+  const [collapsedToolKeys, setCollapsedToolKeys] = useState<string[]>([]);
 
   const roles = useMemo(
     () =>
@@ -156,7 +160,15 @@ function App() {
                       <Think
                         key={`segment-tool-${index}`}
                         title={getToolTitle(segment)}
-                        defaultExpanded={segment.status === "pending" || segment.status === "running"}
+                        expanded={!collapsedToolKeys.includes(getToolSegmentKey(segment, index))}
+                        onExpand={(nextExpand) => {
+                          const toolKey = getToolSegmentKey(segment, index);
+                          setCollapsedToolKeys((prev) =>
+                            nextExpand
+                              ? prev.filter((item) => item !== toolKey)
+                              : Array.from(new Set([...prev, toolKey]))
+                          );
+                        }}
                         styles={{ content: { marginTop: 8 } }}
                       >
                         {renderToolText(segment)}
@@ -188,6 +200,28 @@ function App() {
       } as const),
     []
   );
+
+  useEffect(() => {
+    const nextKeys: string[] = [];
+    for (const conversation of conversations) {
+      for (const item of conversation.items) {
+        const segments = item.extraInfo?.segments || [];
+        segments.forEach((segment, index) => {
+          if (segment.type !== "tool") {
+            return;
+          }
+          if (
+            segment.status === "completed" ||
+            segment.status === "failed" ||
+            segment.status === "stopped"
+          ) {
+            nextKeys.push(getToolSegmentKey(segment, index));
+          }
+        });
+      }
+    }
+    setCollapsedToolKeys((prev) => Array.from(new Set([...prev, ...nextKeys])));
+  }, [conversations]);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId),
