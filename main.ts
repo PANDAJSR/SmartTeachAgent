@@ -53,7 +53,38 @@ type ChatResult = {
 
 const activeAbortControllers = new Map<string, AbortController>();
 const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
-dotenv.config({ path: envFilePath });
+const LOG_PREFIX = "[SmartTeachAgent][main]";
+
+function logInfo(message: string, extra?: unknown): void {
+  if (typeof extra === "undefined") {
+    console.info(`${LOG_PREFIX} ${message}`);
+    return;
+  }
+  console.info(`${LOG_PREFIX} ${message}`, extra);
+}
+
+function logError(message: string, error?: unknown): void {
+  if (!error) {
+    console.error(`${LOG_PREFIX} ${message}`);
+    return;
+  }
+  if (error instanceof Error) {
+    console.error(`${LOG_PREFIX} ${message}: ${error.message}`);
+    if (error.stack) {
+      console.error(`${LOG_PREFIX} stack: ${error.stack}`);
+    }
+    return;
+  }
+  console.error(`${LOG_PREFIX} ${message}`, error);
+}
+
+const envLoadResult = dotenv.config({ path: envFilePath });
+if (envLoadResult.error) {
+  logError(`加载 env 失败，路径=${envFilePath}`, envLoadResult.error);
+} else {
+  logInfo(`已加载 env，路径=${envFilePath}，包含键数量=${Object.keys(envLoadResult.parsed || {}).length}`);
+}
+logInfo(`ANTHROPIC_API_KEY 已配置=${Boolean(process.env.ANTHROPIC_API_KEY)}`);
 
 function toPreview(value: unknown): string {
   try {
@@ -286,14 +317,18 @@ function finalizeToolStatuses(segments: ContentSegment[]): void {
 async function runClaudeChat(
   message?: string,
   onProgress?: (snapshot: ChatProgressSnapshot) => void,
-  abortController?: AbortController
+  abortController?: AbortController,
+  debugTag = "chat"
 ): Promise<ChatResult> {
   const clean = (message || "").trim();
   if (!clean) {
     throw new Error("message 不能为空");
   }
 
+  logInfo(`[${debugTag}] runClaudeChat start，messageLength=${clean.length}`);
+
   if (!process.env.ANTHROPIC_API_KEY) {
+    logError(`[${debugTag}] 缺少 ANTHROPIC_API_KEY`);
     throw new Error(`缺少 ANTHROPIC_API_KEY，请先在 ${envFilePath} 中配置后重试`);
   }
 
@@ -492,13 +527,18 @@ async function runClaudeChat(
         stopReason: sdkMessage.stop_reason,
       };
       emitProgress();
+      logInfo(
+        `[${debugTag}] Claude 成功返回，turns=${resultMeta?.turns ?? 0} durationMs=${resultMeta?.durationMs ?? 0} costUsd=${resultMeta?.costUsd ?? 0}`
+      );
     } else {
       const detail = sdkMessage.errors?.join("; ") || "Claude Agent 执行失败";
+      logError(`[${debugTag}] Claude result 失败，errors=${sdkMessage.errors?.join(" | ") || "empty"}`);
       throw new Error(detail);
     }
   }
   } catch (error) {
     if (abortController?.signal.aborted) {
+      logInfo(`[${debugTag}] 请求被主动中止`);
       finalizeToolStatuses(segments);
       return {
         reply: streamedReply,
@@ -509,6 +549,7 @@ async function runClaudeChat(
         stopped: true,
       };
     }
+    logError(`[${debugTag}] runClaudeChat 异常`, error);
     throw error;
   }
 
@@ -528,9 +569,13 @@ async function runClaudeChat(
 ipcMain.handle(
   "chat:send",
   async (_event, payload?: { message?: string }): Promise<ChatResult | { error: string }> => {
+    logInfo("[chat:send] 收到请求");
     try {
-      return await runClaudeChat(payload?.message);
+      const result = await runClaudeChat(payload?.message, undefined, undefined, "chat:send");
+      logInfo("[chat:send] 请求完成");
+      return result;
     } catch (error) {
+      logError("[chat:send] 请求失败", error);
       return {
         error: error instanceof Error ? error.message : "服务异常",
       };
@@ -546,8 +591,10 @@ ipcMain.handle(
   ): Promise<ChatResult | { error: string }> => {
     const requestId = (payload?.requestId || "").trim();
     if (!requestId) {
+      logError("[chat:send:stream] 缺少 requestId");
       return { error: "缺少 requestId" };
     }
+    logInfo(`[chat:send:stream] 收到请求 requestId=${requestId}`);
     const channel = `chat:stream:${requestId}`;
     const sendSnapshot = (snapshot: ChatProgressSnapshot): void => {
       if (!event.sender.isDestroyed()) {
@@ -557,21 +604,30 @@ ipcMain.handle(
 
     const abortController = new AbortController();
     activeAbortControllers.set(requestId, abortController);
+    logInfo(`[chat:send:stream] 已注册中断控制器 requestId=${requestId}`);
 
     try {
-      const result = await runClaudeChat(payload?.message, sendSnapshot, abortController);
+      const result = await runClaudeChat(
+        payload?.message,
+        sendSnapshot,
+        abortController,
+        `chat:send:stream:${requestId}`
+      );
       if (!event.sender.isDestroyed()) {
         event.sender.send(channel, { type: result.stopped ? "stopped" : "done" });
       }
+      logInfo(`[chat:send:stream] 请求完成 requestId=${requestId} stopped=${Boolean(result.stopped)}`);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : "服务异常";
+      logError(`[chat:send:stream] 请求失败 requestId=${requestId}`, error);
       if (!event.sender.isDestroyed()) {
         event.sender.send(channel, { type: "error", error: message });
       }
       return { error: message };
     } finally {
       activeAbortControllers.delete(requestId);
+      logInfo(`[chat:send:stream] 已清理中断控制器 requestId=${requestId}`);
     }
   }
 );
@@ -579,35 +635,51 @@ ipcMain.handle(
 ipcMain.handle("chat:stop", async (_event, payload?: { requestId?: string }) => {
   const requestId = (payload?.requestId || "").trim();
   if (!requestId) {
+    logError("[chat:stop] 缺少 requestId");
     return { ok: false, error: "缺少 requestId" };
   }
   const controller = activeAbortControllers.get(requestId);
   if (!controller) {
+    logError(`[chat:stop] 未找到 requestId=${requestId}`);
     return { ok: false, error: "未找到可中断的请求" };
   }
   controller.abort();
+  logInfo(`[chat:stop] 已中断 requestId=${requestId}`);
   return { ok: true };
 });
 
 ipcMain.handle("env-file:get-path", async () => envFilePath);
 
 ipcMain.handle("env-file:read", async () => {
+  logInfo(`[env-file:read] 读取 ${envFilePath}`);
   try {
     const content = await fs.readFile(envFilePath, "utf-8");
+    logInfo(`[env-file:read] 成功，长度=${content.length}`);
     return { path: envFilePath, content };
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      logInfo("[env-file:read] 文件不存在，返回空内容");
       return { path: envFilePath, content: "" };
     }
+    logError("[env-file:read] 失败", error);
     throw error;
   }
 });
 
 ipcMain.handle("env-file:write", async (_event, payload?: { content?: string }) => {
   const content = typeof payload?.content === "string" ? payload.content : "";
+  logInfo(`[env-file:write] 写入 ${envFilePath}，长度=${content.length}`);
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(envFilePath, content, "utf-8");
-  dotenv.config({ path: envFilePath, override: true });
+  const reloadResult = dotenv.config({ path: envFilePath, override: true });
+  if (reloadResult.error) {
+    logError("[env-file:write] 写入后重载 env 失败", reloadResult.error);
+  } else {
+    logInfo(
+      `[env-file:write] 写入后重载 env 成功，包含键数量=${Object.keys(reloadResult.parsed || {}).length}`
+    );
+  }
+  logInfo(`[env-file:write] ANTHROPIC_API_KEY 已配置=${Boolean(process.env.ANTHROPIC_API_KEY)}`);
   return { ok: true, path: envFilePath };
 });
 
@@ -624,13 +696,16 @@ function createWindow(): void {
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
+    logInfo(`加载开发地址 ${devServerUrl}`);
     void win.loadURL(devServerUrl);
   } else {
+    logInfo("加载本地构建页面 dist/index.html");
     void win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 }
 
 void app.whenReady().then(() => {
+  logInfo("Electron app ready");
   createWindow();
 
   app.on("activate", () => {
@@ -641,7 +716,9 @@ void app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  logInfo("window-all-closed");
   if (process.platform !== "darwin") {
+    logInfo("非 macOS，退出应用");
     app.quit();
   }
 });

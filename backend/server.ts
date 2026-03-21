@@ -8,7 +8,38 @@ import { buildClaudeOptions } from "./claudeOptions";
 
 const app = express();
 const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
-dotenv.config({ path: envFilePath });
+const LOG_PREFIX = "[SmartTeachAgent][server]";
+
+function logInfo(message: string, extra?: unknown): void {
+  if (typeof extra === "undefined") {
+    console.info(`${LOG_PREFIX} ${message}`);
+    return;
+  }
+  console.info(`${LOG_PREFIX} ${message}`, extra);
+}
+
+function logError(message: string, error?: unknown): void {
+  if (!error) {
+    console.error(`${LOG_PREFIX} ${message}`);
+    return;
+  }
+  if (error instanceof Error) {
+    console.error(`${LOG_PREFIX} ${message}: ${error.message}`);
+    if (error.stack) {
+      console.error(`${LOG_PREFIX} stack: ${error.stack}`);
+    }
+    return;
+  }
+  console.error(`${LOG_PREFIX} ${message}`, error);
+}
+
+const envLoadResult = dotenv.config({ path: envFilePath });
+if (envLoadResult.error) {
+  logError(`加载 env 失败，路径=${envFilePath}`, envLoadResult.error);
+} else {
+  logInfo(`已加载 env，路径=${envFilePath}，包含键数量=${Object.keys(envLoadResult.parsed || {}).length}`);
+}
+logInfo(`ANTHROPIC_API_KEY 已配置=${Boolean(process.env.ANTHROPIC_API_KEY)}`);
 const port = Number(process.env.PORT || 3001);
 
 app.use(cors());
@@ -265,12 +296,16 @@ app.post(
   "/api/chat",
   async (req: Request<unknown, unknown, ChatRequestBody>, res: Response) => {
     const message = (req.body?.message || "").trim();
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    logInfo(`[${requestId}] 收到 /api/chat，messageLength=${message.length}`);
 
     if (!message) {
+      logError(`[${requestId}] message 为空`);
       return res.status(400).json({ error: "message 不能为空" });
     }
 
     if (!process.env.ANTHROPIC_API_KEY) {
+      logError(`[${requestId}] 缺少 ANTHROPIC_API_KEY`);
       return res.status(500).json({
         error: `缺少 ANTHROPIC_API_KEY，请先在 ${envFilePath} 中配置后重试`,
       });
@@ -454,16 +489,22 @@ app.post(
             turns: sdkMessage.num_turns,
             stopReason: sdkMessage.stop_reason,
           };
+          logInfo(
+            `[${requestId}] Claude 成功返回，turns=${resultMeta?.turns ?? 0} durationMs=${resultMeta?.durationMs ?? 0} costUsd=${resultMeta?.costUsd ?? 0}`
+          );
         } else {
           const detail = sdkMessage.errors?.join("; ") || "Claude Agent 执行失败";
+          logError(`[${requestId}] Claude result 失败，errors=${sdkMessage.errors?.join(" | ") || "empty"}`);
           throw new Error(detail);
         }
       }
 
       if (!finalResult) {
+        logError(`[${requestId}] 未获取到 Claude 返回内容`);
         throw new Error("未获取到 Claude 返回内容");
       }
 
+      logInfo(`[${requestId}] /api/chat 成功返回`);
       return res.json({
         reply: finalResult,
         rendered: buildRenderedContent(segments, finalResult),
@@ -472,7 +513,7 @@ app.post(
         trace,
       });
     } catch (error) {
-      console.error("[api/chat] error:", error);
+      logError(`[${requestId}] /api/chat 异常`, error);
       return res.status(500).json({
         error: error instanceof Error ? error.message : "服务异常",
       });
@@ -481,5 +522,5 @@ app.post(
 );
 
 app.listen(port, () => {
-  console.log(`Claude Agent Demo backend running at http://localhost:${port}`);
+  logInfo(`Claude Agent Demo backend running at http://localhost:${port}`);
 });

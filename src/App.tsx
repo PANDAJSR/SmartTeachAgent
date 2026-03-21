@@ -133,6 +133,8 @@ const getToolTitle = (segment: ContentSegment): string => {
 const getToolSegmentKey = (segment: ContentSegment, index: number): string =>
   segment.toolUseId || `${segment.toolName || "tool"}-${index}-${segment.text.slice(0, 20)}`;
 
+const UI_LOG_PREFIX = "[SmartTeachAgent][renderer]";
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -266,6 +268,7 @@ function App() {
     const userKey = `user-${Date.now()}`;
     const aiKey = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    console.info(`${UI_LOG_PREFIX} sendMessage start requestId=${requestId} messageLength=${clean.length}`);
     activeRequestIdRef.current = requestId;
 
     setConversations((prev) =>
@@ -303,7 +306,11 @@ function App() {
       if (window.smartTeach?.chatStream) {
         let stopped = false;
         data = await window.smartTeach.chatStream(clean, requestId, (event: StreamEvent) => {
+          if (event.type === "error") {
+            console.error(`${UI_LOG_PREFIX} stream error requestId=${requestId}`, event.error);
+          }
           if (event.type === "stopped") {
+            console.info(`${UI_LOG_PREFIX} stream stopped requestId=${requestId}`);
             stopped = true;
             setConversations((prev) =>
               prev.map((conversation) =>
@@ -330,6 +337,9 @@ function App() {
           if (event.type !== "snapshot") {
             return;
           }
+          console.info(
+            `${UI_LOG_PREFIX} stream snapshot requestId=${requestId} segments=${event.segments.length} trace=${event.trace.length}`
+          );
           setConversations((prev) =>
             prev.map((conversation) =>
               conversation.id === currentConversationId
@@ -356,6 +366,7 @@ function App() {
           );
         });
         if (stopped) {
+          console.info(`${UI_LOG_PREFIX} sendMessage end requestId=${requestId} stopped=true`);
           setLoading(false);
           activeRequestIdRef.current = null;
           return;
@@ -383,6 +394,7 @@ function App() {
       if (data.error) {
         throw new Error(data.error);
       }
+      console.info(`${UI_LOG_PREFIX} sendMessage success requestId=${requestId}`);
 
       setConversations((prev) =>
         prev.map((conversation) =>
@@ -409,6 +421,7 @@ function App() {
         )
       );
     } catch (error) {
+      console.error(`${UI_LOG_PREFIX} sendMessage failed requestId=${requestId}`, error);
       setConversations((prev) =>
         prev.map((conversation) =>
           conversation.id === currentConversationId
@@ -433,6 +446,7 @@ function App() {
         )
       );
     } finally {
+      console.info(`${UI_LOG_PREFIX} sendMessage finally requestId=${requestId}`);
       setLoading(false);
       activeRequestIdRef.current = null;
     }
@@ -451,6 +465,7 @@ function App() {
   };
 
   const openEnvEditor = async (): Promise<void> => {
+    console.info(`${UI_LOG_PREFIX} openEnvEditor start`);
     setEnvEditorOpen(true);
     setEnvEditorLoading(true);
     setEnvEditorError("");
@@ -468,7 +483,9 @@ function App() {
       const data = await readEnvFile();
       setEnvFilePath(data.path);
       setEnvFileContent(data.content);
+      console.info(`${UI_LOG_PREFIX} openEnvEditor success path=${data.path} length=${data.content.length}`);
     } catch (error) {
+      console.error(`${UI_LOG_PREFIX} openEnvEditor failed`, error);
       setEnvEditorError(error instanceof Error ? error.message : "读取 .env 文件失败");
       setEnvFileContent("");
     } finally {
@@ -477,6 +494,7 @@ function App() {
   };
 
   const saveEnvFile = async (): Promise<void> => {
+    console.info(`${UI_LOG_PREFIX} saveEnvFile start length=${envFileContent.length}`);
     const writeEnvFile = window.smartTeach?.writeEnvFile;
     if (!writeEnvFile) {
       setEnvEditorError("当前模式不支持直接保存，请在 Electron 客户端中使用此功能。");
@@ -489,7 +507,9 @@ function App() {
       const result = await writeEnvFile(envFileContent);
       setEnvFilePath(result.path);
       setEnvEditorNotice(`保存成功：${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
+      console.info(`${UI_LOG_PREFIX} saveEnvFile success path=${result.path}`);
     } catch (error) {
+      console.error(`${UI_LOG_PREFIX} saveEnvFile failed`, error);
       setEnvEditorError(error instanceof Error ? error.message : "保存 .env 文件失败");
     } finally {
       setEnvEditorSaving(false);
