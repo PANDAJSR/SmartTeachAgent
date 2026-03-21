@@ -198,7 +198,7 @@ function App() {
         },
         user: { placement: "end", variant: "filled" },
       } as const),
-    []
+    [collapsedToolKeys]
   );
 
   useEffect(() => {
