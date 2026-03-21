@@ -26,9 +26,12 @@ type SettingsModalProps = {
   configError: string;
   configNotice: string;
   mcpServers: McpServerDraft[];
+  mcpTestingMap: Record<string, boolean>;
+  mcpTestResultMap: Record<string, { ok: boolean; message: string }>;
   onAddMcpServer: () => void;
   onRemoveMcpServer: (id: string) => void;
   onChangeMcpServer: (id: string, patch: Partial<Omit<McpServerDraft, "id">>) => void;
+  onTestMcpServer: (id: string) => Promise<void>;
   onSaveConfig: () => Promise<void>;
 };
 
@@ -50,9 +53,12 @@ function SettingsModal(props: SettingsModalProps) {
     configError,
     configNotice,
     mcpServers,
+    mcpTestingMap,
+    mcpTestResultMap,
     onAddMcpServer,
     onRemoveMcpServer,
     onChangeMcpServer,
+    onTestMcpServer,
     onSaveConfig,
   } = props;
 
@@ -125,6 +131,20 @@ function SettingsModal(props: SettingsModalProps) {
                     autoSize={{ minRows: 3, maxRows: 6 }}
                     disabled={loading}
                   />
+                  <Space size={8} wrap>
+                    <Button
+                      onClick={() => void onTestMcpServer(server.id)}
+                      loading={Boolean(mcpTestingMap[server.id])}
+                      disabled={loading}
+                    >
+                      测试连接
+                    </Button>
+                    {mcpTestResultMap[server.id] ? (
+                      <Typography.Text type={mcpTestResultMap[server.id].ok ? "success" : "danger"}>
+                        {mcpTestResultMap[server.id].message}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
                 </Space>
               </div>
             ))}

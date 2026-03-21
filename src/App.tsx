@@ -97,6 +97,11 @@ type McpServerDraft = {
   headersText: string;
 };
 
+type McpTestResult = {
+  ok: boolean;
+  message: string;
+};
+
 const MAX_HISTORY_TURNS = 24;
 
 const createConversation = (index: number): Conversation => {
@@ -213,6 +218,8 @@ function App() {
   const [configError, setConfigError] = useState<string>("");
   const [configNotice, setConfigNotice] = useState<string>("");
   const [mcpServers, setMcpServers] = useState<McpServerDraft[]>([createMcpServerDraft(0)]);
+  const [mcpTestingMap, setMcpTestingMap] = useState<Record<string, boolean>>({});
+  const [mcpTestResultMap, setMcpTestResultMap] = useState<Record<string, McpTestResult>>({});
 
   const roles = useMemo(
     () =>
@@ -568,7 +575,7 @@ function App() {
       const config = data.config || {};
       const httpServers = config.mcp?.httpServers;
       if (Array.isArray(httpServers) && httpServers.length > 0) {
-        setMcpServers(
+        const nextServers =
           httpServers.map((server, index) => ({
             id: createMcpServerDraft(index).id,
             enabled: Boolean(server.enabled),
@@ -578,8 +585,10 @@ function App() {
               server.headers && Object.keys(server.headers).length > 0
                 ? JSON.stringify(server.headers, null, 2)
                 : "",
-          }))
-        );
+          }));
+        setMcpServers(nextServers);
+        setMcpTestingMap({});
+        setMcpTestResultMap({});
       } else {
         const legacyServer = (config.mcp as { macHttpServer?: {
           enabled?: boolean;
@@ -589,21 +598,23 @@ function App() {
         } } | undefined)?.macHttpServer;
         if (legacyServer) {
           const server = legacyServer;
-        setMcpServers([
-          {
-            id: createMcpServerDraft(0).id,
-            enabled: Boolean(server.enabled),
-            name: (server.name || "http-server-1").trim() || "http-server-1",
-            url: (server.url || "").trim(),
-            headersText:
-              server.headers && Object.keys(server.headers).length > 0
-                ? JSON.stringify(server.headers, null, 2)
-                : "",
-          },
-        ]);
+          setMcpServers([
+            {
+              id: createMcpServerDraft(0).id,
+              enabled: Boolean(server.enabled),
+              name: (server.name || "http-server-1").trim() || "http-server-1",
+              url: (server.url || "").trim(),
+              headersText:
+                server.headers && Object.keys(server.headers).length > 0
+                  ? JSON.stringify(server.headers, null, 2)
+                  : "",
+            },
+          ]);
         } else {
           setMcpServers([createMcpServerDraft(0)]);
         }
+        setMcpTestingMap({});
+        setMcpTestResultMap({});
       }
       console.info(`${UI_LOG_PREFIX} loadConfigFile success path=${data.path}`);
     } catch (error) {
@@ -631,10 +642,79 @@ function App() {
       const next = prev.filter((item) => item.id !== id);
       return next.length > 0 ? next : [createMcpServerDraft(0)];
     });
+    setMcpTestingMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setMcpTestResultMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const updateMcpServer = (id: string, patch: Partial<Omit<McpServerDraft, "id">>): void => {
     setMcpServers((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const testMcpServerConnection = async (id: string): Promise<void> => {
+    const target = mcpServers.find((item) => item.id === id);
+    if (!target) {
+      return;
+    }
+    let headers: Record<string, string> | undefined;
+    const cleanHeadersText = target.headersText.trim();
+    if (cleanHeadersText) {
+      try {
+        const parsed = JSON.parse(cleanHeadersText) as Record<string, unknown>;
+        headers = Object.fromEntries(
+          Object.entries(parsed).map(([key, value]) => [key, String(value)])
+        );
+      } catch {
+        setMcpTestResultMap((prev) => ({
+          ...prev,
+          [id]: { ok: false, message: "请求头 JSON 格式错误，请先修正后再测试。" },
+        }));
+        return;
+      }
+    }
+
+    const testApi = window.smartTeach?.testMcpServerConnection;
+    if (!testApi) {
+      setMcpTestResultMap((prev) => ({
+        ...prev,
+        [id]: { ok: false, message: "当前模式不支持连接测试，请在 Electron 客户端中使用此功能。" },
+      }));
+      return;
+    }
+
+    setMcpTestingMap((prev) => ({ ...prev, [id]: true }));
+    setMcpTestResultMap((prev) => ({
+      ...prev,
+      [id]: { ok: false, message: "正在测试连接..." },
+    }));
+    try {
+      const result = await testApi({
+        name: target.name.trim(),
+        url: target.url.trim(),
+        headers,
+      });
+      setMcpTestResultMap((prev) => ({
+        ...prev,
+        [id]: { ok: result.ok, message: result.message },
+      }));
+    } catch (error) {
+      setMcpTestResultMap((prev) => ({
+        ...prev,
+        [id]: {
+          ok: false,
+          message: error instanceof Error ? error.message : "测试连接失败",
+        },
+      }));
+    } finally {
+      setMcpTestingMap((prev) => ({ ...prev, [id]: false }));
+    }
   };
 
   const saveEnvFile = async (): Promise<void> => {
@@ -798,9 +878,12 @@ function App() {
         configError={configError}
         configNotice={configNotice}
         mcpServers={mcpServers}
+        mcpTestingMap={mcpTestingMap}
+        mcpTestResultMap={mcpTestResultMap}
         onAddMcpServer={addMcpServer}
         onRemoveMcpServer={removeMcpServer}
         onChangeMcpServer={updateMcpServer}
+        onTestMcpServer={testMcpServerConnection}
         onSaveConfig={saveConfigFile}
       />
     </main>

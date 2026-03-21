@@ -88,4 +88,16 @@ contextBridge.exposeInMainWorld("smartTeach", {
   writeConfigFile: async (config: AppConfig) => {
     return ipcRenderer.invoke("config-file:write", { config }) as Promise<{ ok: boolean; path: string }>;
   },
+  testMcpServerConnection: async (payload: {
+    name?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    return ipcRenderer.invoke("mcp-server:test-connection", payload) as Promise<{
+      ok: boolean;
+      reachable: boolean;
+      status: number | null;
+      message: string;
+    }>;
+  },
 });

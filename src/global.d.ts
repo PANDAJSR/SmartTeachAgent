@@ -74,6 +74,16 @@ declare global {
       getConfigFilePath?: () => Promise<string>;
       readConfigFile?: () => Promise<{ path: string; config: AppConfig }>;
       writeConfigFile?: (config: AppConfig) => Promise<{ ok: boolean; path: string }>;
+      testMcpServerConnection?: (payload: {
+        name?: string;
+        url?: string;
+        headers?: Record<string, string>;
+      }) => Promise<{
+        ok: boolean;
+        reachable: boolean;
+        status: number | null;
+        message: string;
+      }>;
     };
   }
 }
