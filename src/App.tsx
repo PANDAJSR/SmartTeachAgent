@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
+import { Actions, Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { Button, Card, Space, Typography } from "antd";
 import SettingsModal from "./components/SettingsModal";
@@ -286,9 +286,20 @@ function App() {
               return null;
             }
             return (
-              <Button type="link" size="small" disabled={loading} onClick={() => void sendMessage(text)}>
-                重新请求模型
-              </Button>
+              <Actions
+                variant="borderless"
+                items={[
+                  {
+                    key: "retry-request",
+                    icon: <i className="fa-solid fa-rotate-right" aria-hidden="true" />,
+                    onItemClick: () => {
+                      if (!loading) {
+                        void sendMessage(text);
+                      }
+                    },
+                  },
+                ]}
+              />
             );
           },
         },
