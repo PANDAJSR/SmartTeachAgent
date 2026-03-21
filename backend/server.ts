@@ -33,6 +33,22 @@ function logError(message: string, error?: unknown): void {
   console.error(`${LOG_PREFIX} ${message}`, error);
 }
 
+function sanitizeClaudeOptions(options: ReturnType<typeof buildClaudeOptions>): Record<string, unknown> {
+  return {
+    model: options.model || "(default)",
+    maxTurns: options.maxTurns,
+    permissionMode: options.permissionMode,
+    allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions ?? false,
+    cwd: options.cwd,
+    toolsType:
+      options.tools && typeof options.tools === "object" && "type" in options.tools
+        ? (options.tools as { type?: string }).type
+        : "unknown",
+    allowedToolsCount: Array.isArray(options.allowedTools) ? options.allowedTools.length : 0,
+    disallowedToolsCount: Array.isArray(options.disallowedTools) ? options.disallowedTools.length : 0,
+  };
+}
+
 const envLoadResult = dotenv.config({ path: envFilePath });
 if (envLoadResult.error) {
   logError(`加载 env 失败，路径=${envFilePath}`, envLoadResult.error);
@@ -325,6 +341,7 @@ app.post(
 
       const options = buildClaudeOptions();
       options.includePartialMessages = true;
+      logInfo(`[${requestId}] Claude options`, sanitizeClaudeOptions(options));
 
       for await (const sdkMessage of query({ prompt: message, options })) {
         if (sdkMessage.type === "assistant") {
@@ -495,6 +512,29 @@ app.post(
         } else {
           const detail = sdkMessage.errors?.join("; ") || "Claude Agent 执行失败";
           logError(`[${requestId}] Claude result 失败，errors=${sdkMessage.errors?.join(" | ") || "empty"}`);
+          logInfo(`[${requestId}] Claude result 失败详情`, {
+            subtype: sdkMessage.subtype,
+            durationMs:
+              "duration_ms" in sdkMessage && typeof sdkMessage.duration_ms === "number"
+                ? sdkMessage.duration_ms
+                : undefined,
+            numTurns:
+              "num_turns" in sdkMessage && typeof sdkMessage.num_turns === "number"
+                ? sdkMessage.num_turns
+                : undefined,
+            totalCostUsd:
+              "total_cost_usd" in sdkMessage && typeof sdkMessage.total_cost_usd === "number"
+                ? sdkMessage.total_cost_usd
+                : undefined,
+            stopReason:
+              "stop_reason" in sdkMessage && typeof sdkMessage.stop_reason !== "undefined"
+                ? sdkMessage.stop_reason
+                : undefined,
+            hasResultText:
+              "result" in sdkMessage && typeof sdkMessage.result === "string"
+                ? sdkMessage.result.length > 0
+                : false,
+          });
           throw new Error(detail);
         }
       }
