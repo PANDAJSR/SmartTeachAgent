@@ -67,6 +67,13 @@ type Conversation = {
   createdAt: number;
 };
 
+type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const MAX_HISTORY_TURNS = 24;
+
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
   return {
@@ -134,6 +141,23 @@ const getToolSegmentKey = (segment: ContentSegment, index: number): string =>
   segment.toolUseId || `${segment.toolName || "tool"}-${index}-${segment.text.slice(0, 20)}`;
 
 const UI_LOG_PREFIX = "[SmartTeachAgent][renderer]";
+
+const buildHistoryTurns = (items: ChatItem[]): ChatHistoryTurn[] =>
+  items
+    .filter((item) => {
+      if (item.role === "user") {
+        return Boolean(item.content.trim());
+      }
+      if (item.role === "ai") {
+        return item.status === "success" && Boolean(item.content.trim());
+      }
+      return false;
+    })
+    .map((item) => ({
+      role: (item.role === "user" ? "user" : "assistant") as ChatHistoryTurn["role"],
+      content: item.content.trim(),
+    }))
+    .slice(-MAX_HISTORY_TURNS);
 
 function App() {
   const initialConversation = createConversation(1);
@@ -265,6 +289,7 @@ function App() {
     }
 
     const currentConversationId = activeConversationId;
+    const history = buildHistoryTurns(activeConversation?.items ?? []);
     const userKey = `user-${Date.now()}`;
     const aiKey = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -305,7 +330,7 @@ function App() {
       let data: ChatResponse | undefined;
       if (window.smartTeach?.chatStream) {
         let stopped = false;
-        data = await window.smartTeach.chatStream(clean, requestId, (event: StreamEvent) => {
+        data = await window.smartTeach.chatStream(clean, requestId, history, (event: StreamEvent) => {
           if (event.type === "error") {
             console.error(`${UI_LOG_PREFIX} stream error requestId=${requestId}`, event.error);
           }
@@ -372,14 +397,14 @@ function App() {
           return;
         }
       } else if (window.smartTeach?.chat) {
-        data = await window.smartTeach.chat(clean);
+        data = await window.smartTeach.chat(clean, history);
       } else {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ message: clean }),
+          body: JSON.stringify({ message: clean, history }),
         });
         data = (await response.json()) as ChatResponse;
         if (!response.ok) {

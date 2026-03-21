@@ -41,13 +41,19 @@ type ChatStreamEvent =
       error: string;
     };
 
+type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 declare global {
   interface Window {
     smartTeach?: {
-      chat: (message: string) => Promise<ChatResponse>;
+      chat: (message: string, history?: ChatHistoryTurn[]) => Promise<ChatResponse>;
       chatStream?: (
         message: string,
         requestId: string,
+        history: ChatHistoryTurn[] | undefined,
         onEvent: (event: ChatStreamEvent) => void
       ) => Promise<ChatResponse>;
       stopChat?: (requestId: string) => Promise<{ ok: boolean; error?: string }>;

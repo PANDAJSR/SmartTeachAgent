@@ -29,13 +29,19 @@ type StreamEvent = {
   error: string;
 };
 
+type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 contextBridge.exposeInMainWorld("smartTeach", {
-  chat: async (message: string) => {
-    return ipcRenderer.invoke("chat:send", { message });
+  chat: async (message: string, history?: ChatHistoryTurn[]) => {
+    return ipcRenderer.invoke("chat:send", { message, history });
   },
   chatStream: async (
     message: string,
     requestId: string,
+    history: ChatHistoryTurn[] | undefined,
     onEvent: (event: StreamEvent) => void
   ) => {
     const channel = `chat:stream:${requestId}`;
@@ -45,7 +51,7 @@ contextBridge.exposeInMainWorld("smartTeach", {
 
     ipcRenderer.on(channel, listener);
     try {
-      return await ipcRenderer.invoke("chat:send:stream", { message, requestId });
+      return await ipcRenderer.invoke("chat:send:stream", { message, requestId, history });
     } finally {
       ipcRenderer.removeListener(channel, listener);
     }

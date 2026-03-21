@@ -67,7 +67,15 @@ app.get("/api/health", (_req, res) => {
 
 type ChatRequestBody = {
   message?: string;
+  history?: ChatHistoryTurn[];
 };
+
+type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const MAX_HISTORY_TURNS = 24;
 
 type TraceEntry = {
   type: "tool" | "thinking";
@@ -308,6 +316,43 @@ function finalizeToolStatuses(segments: ContentSegment[]): void {
   }
 }
 
+function normalizeHistoryTurns(history?: ChatHistoryTurn[]): ChatHistoryTurn[] {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  return history
+    .filter(
+      (turn) =>
+        turn &&
+        (turn.role === "user" || turn.role === "assistant") &&
+        typeof turn.content === "string" &&
+        turn.content.trim().length > 0
+    )
+    .map((turn) => ({ role: turn.role, content: turn.content.trim() }))
+    .slice(-MAX_HISTORY_TURNS);
+}
+
+function buildPromptWithHistory(message: string, history?: ChatHistoryTurn[]): string {
+  const clean = message.trim();
+  const turns = normalizeHistoryTurns(history);
+  if (!turns.length) {
+    return clean;
+  }
+  const historyBlock = turns
+    .map((turn, index) => `${index + 1}. ${turn.role === "assistant" ? "assistant" : "user"}: ${turn.content}`)
+    .join("\n");
+  return [
+    "你正在继续一段对话，请结合历史上下文回答用户最新问题。",
+    "",
+    "【历史对话】",
+    historyBlock,
+    "【历史对话结束】",
+    "",
+    "【用户最新问题】",
+    clean,
+  ].join("\n");
+}
+
 app.post(
   "/api/chat",
   async (req: Request<unknown, unknown, ChatRequestBody>, res: Response) => {
@@ -338,12 +383,15 @@ app.post(
       const trace: TraceEntry[] = [];
       const segments: ContentSegment[] = [];
       let streamedReply = "";
+      const prompt = buildPromptWithHistory(message, req.body?.history);
+      const historyCount = normalizeHistoryTurns(req.body?.history).length;
 
       const options = buildClaudeOptions();
       options.includePartialMessages = true;
       logInfo(`[${requestId}] Claude options`, sanitizeClaudeOptions(options));
+      logInfo(`[${requestId}] 请求上下文历史条数=${historyCount}`);
 
-      for await (const sdkMessage of query({ prompt: message, options })) {
+      for await (const sdkMessage of query({ prompt, options })) {
         if (sdkMessage.type === "assistant") {
           const blocks = sdkMessage.message?.content;
           if (Array.isArray(blocks)) {

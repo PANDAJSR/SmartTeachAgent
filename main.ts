@@ -51,6 +51,13 @@ type ChatResult = {
   stopped?: boolean;
 };
 
+type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const MAX_HISTORY_TURNS = 24;
+
 const activeAbortControllers = new Map<string, AbortController>();
 const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
 const LOG_PREFIX = "[SmartTeachAgent][main]";
@@ -330,8 +337,46 @@ function finalizeToolStatuses(segments: ContentSegment[]): void {
   }
 }
 
+function normalizeHistoryTurns(history?: ChatHistoryTurn[]): ChatHistoryTurn[] {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  return history
+    .filter(
+      (turn) =>
+        turn &&
+        (turn.role === "user" || turn.role === "assistant") &&
+        typeof turn.content === "string" &&
+        turn.content.trim().length > 0
+    )
+    .map((turn) => ({ role: turn.role, content: turn.content.trim() }))
+    .slice(-MAX_HISTORY_TURNS);
+}
+
+function buildPromptWithHistory(message: string, history?: ChatHistoryTurn[]): string {
+  const clean = message.trim();
+  const turns = normalizeHistoryTurns(history);
+  if (!turns.length) {
+    return clean;
+  }
+  const historyBlock = turns
+    .map((turn, index) => `${index + 1}. ${turn.role === "assistant" ? "assistant" : "user"}: ${turn.content}`)
+    .join("\n");
+  return [
+    "你正在继续一段对话，请结合历史上下文回答用户最新问题。",
+    "",
+    "【历史对话】",
+    historyBlock,
+    "【历史对话结束】",
+    "",
+    "【用户最新问题】",
+    clean,
+  ].join("\n");
+}
+
 async function runClaudeChat(
   message?: string,
+  history?: ChatHistoryTurn[],
   onProgress?: (snapshot: ChatProgressSnapshot) => void,
   abortController?: AbortController,
   debugTag = "chat"
@@ -342,6 +387,8 @@ async function runClaudeChat(
   }
 
   logInfo(`[${debugTag}] runClaudeChat start，messageLength=${clean.length}`);
+  const prompt = buildPromptWithHistory(clean, history);
+  const historyCount = normalizeHistoryTurns(history).length;
 
   if (!process.env.ANTHROPIC_API_KEY) {
     logError(`[${debugTag}] 缺少 ANTHROPIC_API_KEY`);
@@ -377,7 +424,8 @@ async function runClaudeChat(
   emitProgress();
 
   try {
-    for await (const sdkMessage of query({ prompt: clean, options })) {
+    logInfo(`[${debugTag}] 请求上下文历史条数=${historyCount}`);
+    for await (const sdkMessage of query({ prompt, options })) {
     if (sdkMessage.type === "assistant") {
       const blocks = sdkMessage.message?.content;
       if (Array.isArray(blocks)) {
@@ -606,10 +654,13 @@ async function runClaudeChat(
 
 ipcMain.handle(
   "chat:send",
-  async (_event, payload?: { message?: string }): Promise<ChatResult | { error: string }> => {
+  async (
+    _event,
+    payload?: { message?: string; history?: ChatHistoryTurn[] }
+  ): Promise<ChatResult | { error: string }> => {
     logInfo("[chat:send] 收到请求");
     try {
-      const result = await runClaudeChat(payload?.message, undefined, undefined, "chat:send");
+      const result = await runClaudeChat(payload?.message, payload?.history, undefined, undefined, "chat:send");
       logInfo("[chat:send] 请求完成");
       return result;
     } catch (error) {
@@ -625,7 +676,7 @@ ipcMain.handle(
   "chat:send:stream",
   async (
     event,
-    payload?: { message?: string; requestId?: string }
+    payload?: { message?: string; requestId?: string; history?: ChatHistoryTurn[] }
   ): Promise<ChatResult | { error: string }> => {
     const requestId = (payload?.requestId || "").trim();
     if (!requestId) {
@@ -647,6 +698,7 @@ ipcMain.handle(
     try {
       const result = await runClaudeChat(
         payload?.message,
+        payload?.history,
         sendSnapshot,
         abortController,
         `chat:send:stream:${requestId}`
