@@ -139,11 +139,18 @@ export function useTts(): UseTtsResult {
       const audio = new Audio(objectUrl);
       ttsAudioRef.current = audio;
 
+      console.info(`[TTS][${requestId}] 等待 MediaSource sourceopen`);
       await new Promise<void>((resolve, reject) => {
+        const sourceOpenTimeoutMs = 8000;
+        const timeout = window.setTimeout(() => {
+          reject(new Error(`音频缓冲初始化超时（${sourceOpenTimeoutMs}ms）`));
+        }, sourceOpenTimeoutMs);
         mediaSource.addEventListener(
           "sourceopen",
           () => {
             try {
+              window.clearTimeout(timeout);
+              console.info(`[TTS][${requestId}] MediaSource sourceopen`);
               const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
               sourceBuffer.mode = "sequence";
               sourceBuffer.addEventListener("updateend", () => pumpTtsQueue());
@@ -154,11 +161,13 @@ export function useTts(): UseTtsResult {
               ttsSourceBufferRef.current = sourceBuffer;
               resolve();
             } catch (error) {
+              window.clearTimeout(timeout);
               reject(error);
             }
           },
           { once: true }
         );
+        audio.load();
       });
 
       audio.onended = () => {
