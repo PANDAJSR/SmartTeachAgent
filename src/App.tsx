@@ -104,7 +104,14 @@ type McpTestResult = {
 
 const MAX_HISTORY_TURNS = 24;
 const DEFAULT_ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-base";
-const DEFAULT_TTS_MODEL_ID = import.meta.env.VITE_TTS_MODEL_ID || "Xenova/mms-tts-zho";
+const DEFAULT_TTS_MODEL_ID =
+  import.meta.env.VITE_TTS_MODEL_ID || "onnx-community/Kokoro-82M-v1.0-ONNX";
+const DEFAULT_TTS_SPEAKER_EMBEDDINGS_URL =
+  import.meta.env.VITE_TTS_SPEAKER_EMBEDDINGS_URL ||
+  "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/zf_xiaobei.bin";
+const TTS_FALLBACK_MODELS = [
+  "onnx-community/Supertonic-TTS-ONNX",
+] as const;
 const ASR_MODEL_OPTIONS = [
   {
     label: "极速（中文）",
@@ -131,6 +138,21 @@ type TtsResult = {
   toBlob: () => Blob;
 };
 type TtsPipeline = (text: string, options?: Record<string, unknown>) => Promise<TtsResult>;
+
+const getTtsSynthesisOptions = (modelId: string): Record<string, unknown> => {
+  if (modelId === "onnx-community/Kokoro-82M-v1.0-ONNX") {
+    return {
+      speaker_embeddings: DEFAULT_TTS_SPEAKER_EMBEDDINGS_URL,
+    };
+  }
+  if (modelId === "onnx-community/Supertonic-TTS-ONNX") {
+    return {
+      speaker_embeddings:
+        "https://huggingface.co/onnx-community/Supertonic-TTS-ONNX/resolve/main/voices/F1.bin",
+    };
+  }
+  return {};
+};
 
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
@@ -1000,8 +1022,23 @@ function App() {
     stopTtsPlayback();
     setTtsGenerating(true);
     try {
-      const synthesizer = await ensureTtsPipeline(DEFAULT_TTS_MODEL_ID);
-      const output = await synthesizer(clean);
+      const modelCandidates = Array.from(new Set([DEFAULT_TTS_MODEL_ID, ...TTS_FALLBACK_MODELS]));
+      let output: TtsResult | null = null;
+      let lastError: unknown = null;
+      for (const modelId of modelCandidates) {
+        try {
+          const synthesizer = await ensureTtsPipeline(modelId);
+          const ttsOptions = getTtsSynthesisOptions(modelId);
+          output = await synthesizer(clean, ttsOptions);
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!output) {
+        throw lastError instanceof Error ? lastError : new Error("语音模型不可用");
+      }
       const objectUrl = URL.createObjectURL(output.toBlob());
       ttsAudioUrlRef.current = objectUrl;
       const audio = new Audio(objectUrl);
