@@ -16,10 +16,6 @@ export function useTts(): UseTtsResult {
   const [ttsError, setTtsError] = useState<string>("");
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioUrlRef = useRef<string | null>(null);
-  const ttsMediaSourceRef = useRef<MediaSource | null>(null);
-  const ttsSourceBufferRef = useRef<SourceBuffer | null>(null);
-  const ttsChunkQueueRef = useRef<Uint8Array[]>([]);
-  const ttsStreamDoneRef = useRef<boolean>(false);
   const ttsRequestIdRef = useRef<string | null>(null);
 
   const decodeBase64ToUint8Array = (encoded: string): Uint8Array => {
@@ -31,62 +27,31 @@ export function useTts(): UseTtsResult {
     return bytes;
   };
 
-  const tryFinalizeTtsStream = (): void => {
-    const mediaSource = ttsMediaSourceRef.current;
-    const sourceBuffer = ttsSourceBufferRef.current;
-    if (!mediaSource || !sourceBuffer) {
-      return;
+  const mergeChunks = (chunks: Uint8Array[]): Uint8Array => {
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
     }
-    if (!ttsStreamDoneRef.current) {
-      return;
-    }
-    if (ttsChunkQueueRef.current.length > 0 || sourceBuffer.updating) {
-      return;
-    }
-    if (mediaSource.readyState === "open") {
-      try {
-        mediaSource.endOfStream();
-      } catch {
-        // ignore end-of-stream errors
-      }
-    }
+    return merged;
   };
 
-  const pumpTtsQueue = (): void => {
-    const sourceBuffer = ttsSourceBufferRef.current;
-    if (!sourceBuffer || sourceBuffer.updating) {
-      return;
+  const ensureAudioElement = (): HTMLAudioElement => {
+    const existing = ttsAudioRef.current;
+    if (existing) {
+      return existing;
     }
-    const nextChunk = ttsChunkQueueRef.current.shift();
-    if (!nextChunk) {
-      tryFinalizeTtsStream();
-      return;
-    }
-    try {
-      const chunkBuffer =
-        nextChunk.buffer instanceof ArrayBuffer
-          ? nextChunk.buffer.slice(nextChunk.byteOffset, nextChunk.byteOffset + nextChunk.byteLength)
-          : nextChunk.slice().buffer;
-      sourceBuffer.appendBuffer(chunkBuffer);
-    } catch (error) {
-      setTtsError(error instanceof Error ? error.message : "音频分片写入失败");
-      stopTtsPlayback();
-    }
-  };
-
-  const pushTtsChunk = (chunk: Uint8Array): void => {
-    if (!chunk.length) {
-      return;
-    }
-    ttsChunkQueueRef.current.push(chunk);
-    pumpTtsQueue();
+    const audio = document.createElement("audio");
+    audio.preload = "auto";
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    ttsAudioRef.current = audio;
+    return audio;
   };
 
   const resetTtsAudioSource = (): void => {
-    ttsStreamDoneRef.current = true;
-    ttsChunkQueueRef.current = [];
-    ttsSourceBufferRef.current = null;
-    ttsMediaSourceRef.current = null;
     const previousUrl = ttsAudioUrlRef.current;
     if (previousUrl) {
       URL.revokeObjectURL(previousUrl);
@@ -96,10 +61,10 @@ export function useTts(): UseTtsResult {
     if (audio) {
       audio.onended = null;
       audio.onerror = null;
+      audio.src = "";
       if (audio.parentElement) {
         audio.parentElement.removeChild(audio);
       }
-      audio.src = "";
       ttsAudioRef.current = null;
     }
   };
@@ -115,8 +80,44 @@ export function useTts(): UseTtsResult {
       audio.pause();
       audio.currentTime = 0;
     }
+    setTtsGenerating(false);
     setTtsPlaying(false);
     resetTtsAudioSource();
+  };
+
+  const playChunksAsMp3 = async (chunks: Uint8Array[], requestId: string): Promise<void> => {
+    const merged = mergeChunks(chunks);
+    if (!merged.length) {
+      throw new Error("未收到可播放的音频数据");
+    }
+
+    const arrayBuffer = new ArrayBuffer(merged.byteLength);
+    new Uint8Array(arrayBuffer).set(merged);
+    const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+    const objectUrl = URL.createObjectURL(blob);
+    ttsAudioUrlRef.current = objectUrl;
+
+    const audio = ensureAudioElement();
+    audio.onended = () => {
+      setTtsPlaying(false);
+      if (ttsRequestIdRef.current === requestId) {
+        ttsRequestIdRef.current = null;
+      }
+      resetTtsAudioSource();
+    };
+    audio.onerror = () => {
+      setTtsPlaying(false);
+      if (ttsRequestIdRef.current === requestId) {
+        ttsRequestIdRef.current = null;
+      }
+      setTtsError("音频播放失败，请重试");
+      resetTtsAudioSource();
+    };
+
+    audio.src = objectUrl;
+    audio.load();
+    setTtsPlaying(true);
+    await audio.play();
   };
 
   const playTtsText = async (text: string): Promise<void> => {
@@ -124,6 +125,7 @@ export function useTts(): UseTtsResult {
     if (!clean || ttsGenerating) {
       return;
     }
+
     setTtsError("");
     stopTtsPlayback();
     setTtsGenerating(true);
@@ -132,83 +134,13 @@ export function useTts(): UseTtsResult {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       console.info(`[TTS][${requestId}] 开始朗读，textLength=${clean.length}`);
       ttsRequestIdRef.current = requestId;
-      ttsChunkQueueRef.current = [];
-      ttsStreamDoneRef.current = false;
-
-      const mediaSource = new MediaSource();
-      ttsMediaSourceRef.current = mediaSource;
-      const objectUrl = URL.createObjectURL(mediaSource);
-      ttsAudioUrlRef.current = objectUrl;
-      const audio = document.createElement("audio");
-      audio.preload = "auto";
-      audio.style.display = "none";
-      document.body.appendChild(audio);
-      ttsAudioRef.current = audio;
-
-      console.info(`[TTS][${requestId}] 等待 MediaSource sourceopen`);
-      await new Promise<void>((resolve, reject) => {
-        const sourceOpenTimeoutMs = 8000;
-        const timeout = window.setTimeout(() => {
-          reject(new Error(`音频缓冲初始化超时（${sourceOpenTimeoutMs}ms）`));
-        }, sourceOpenTimeoutMs);
-        const onSourceOpen = () => {
-          try {
-            window.clearTimeout(timeout);
-            console.info(`[TTS][${requestId}] MediaSource sourceopen`);
-            const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-            sourceBuffer.mode = "sequence";
-            sourceBuffer.addEventListener("updateend", () => pumpTtsQueue());
-            sourceBuffer.addEventListener("error", () => {
-              setTtsError("音频流缓冲失败");
-              stopTtsPlayback();
-            });
-            ttsSourceBufferRef.current = sourceBuffer;
-            resolve();
-          } catch (error) {
-            window.clearTimeout(timeout);
-            reject(error);
-          }
-        };
-        mediaSource.addEventListener(
-          "sourceopen",
-          onSourceOpen,
-          { once: true }
-        );
-        // 先挂 sourceopen 监听，再设置 src，避免事件早到导致漏监听
-        audio.src = objectUrl;
-        audio.load();
-        if (mediaSource.readyState === "open") {
-          onSourceOpen();
-        }
-      });
-
-      audio.onended = () => {
-        setTtsPlaying(false);
-        ttsRequestIdRef.current = null;
-        resetTtsAudioSource();
-      };
-      audio.onerror = () => {
-        setTtsPlaying(false);
-        ttsRequestIdRef.current = null;
-        setTtsError("音频播放失败，请重试");
-        resetTtsAudioSource();
-      };
-      setTtsPlaying(true);
-      const playPromise = audio.play();
-      void playPromise.catch((error) => {
-        if (ttsRequestIdRef.current !== requestId) {
-          return;
-        }
-        setTtsPlaying(false);
-        ttsRequestIdRef.current = null;
-        setTtsError(error instanceof Error ? error.message : "音频播放失败，请重试");
-        resetTtsAudioSource();
-      });
 
       const synthesizeSpeechStream = window.smartTeach?.synthesizeSpeechStream;
       if (synthesizeSpeechStream) {
+        const streamChunks: Uint8Array[] = [];
         let firstChunkReceived = false;
         console.info(`[TTS][${requestId}] 使用流式合成`);
+
         const streamResult = await synthesizeSpeechStream(
           {
             text: clean,
@@ -220,19 +152,20 @@ export function useTts(): UseTtsResult {
               return;
             }
             if (event.type === "chunk") {
-              if (!firstChunkReceived) {
-                firstChunkReceived = true;
-                console.info(`[TTS][${requestId}] 收到首个音频分片`);
-                setTtsGenerating(false);
+              const chunk = decodeBase64ToUint8Array(event.chunkBase64);
+              if (chunk.length) {
+                streamChunks.push(chunk);
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  console.info(`[TTS][${requestId}] 收到首个音频分片`);
+                  setTtsGenerating(false);
+                }
               }
-              pushTtsChunk(decodeBase64ToUint8Array(event.chunkBase64));
               return;
             }
             if (event.type === "done" || event.type === "stopped") {
               console.info(`[TTS][${requestId}] 流结束，type=${event.type}`);
               setTtsGenerating(false);
-              ttsStreamDoneRef.current = true;
-              pumpTtsQueue();
               return;
             }
             if (event.type === "error") {
@@ -243,11 +176,18 @@ export function useTts(): UseTtsResult {
             }
           }
         );
+
         if (streamResult?.error) {
           console.error(`[TTS][${requestId}] 流请求返回错误: ${streamResult.error}`);
           throw new Error(streamResult.error);
         }
-        console.info(`[TTS][${requestId}] 流式合成请求正常返回`);
+        if (ttsRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        console.info(`[TTS][${requestId}] 流式合成完成，chunkCount=${streamChunks.length}`);
+        setTtsGenerating(false);
+        await playChunksAsMp3(streamChunks, requestId);
         return;
       }
 
@@ -255,15 +195,15 @@ export function useTts(): UseTtsResult {
       if (!synthesizeSpeech) {
         throw new Error("当前模式不支持 Edge TTS，请在 Electron 客户端中使用。");
       }
+
       const ttsResult = await synthesizeSpeech({ text: clean, voice: DEFAULT_EDGE_TTS_VOICE });
       if (!ttsResult.ok) {
         throw new Error(ttsResult.error || "语音合成失败");
       }
+
       console.info(`[TTS][${requestId}] 使用非流式合成成功`);
       setTtsGenerating(false);
-      pushTtsChunk(decodeBase64ToUint8Array(ttsResult.audioBase64));
-      ttsStreamDoneRef.current = true;
-      pumpTtsQueue();
+      await playChunksAsMp3([decodeBase64ToUint8Array(ttsResult.audioBase64)], requestId);
     } catch (error) {
       console.error("[TTS] 朗读失败", error);
       setTtsPlaying(false);
