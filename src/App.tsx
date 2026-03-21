@@ -276,9 +276,24 @@ function App() {
           },
           footer: () => null,
         },
-        user: { placement: "end", variant: "filled" },
+        user: {
+          placement: "end",
+          variant: "filled",
+          footerPlacement: "outer-end",
+          footer: (content: string) => {
+            const text = String(content || "").trim();
+            if (!text) {
+              return null;
+            }
+            return (
+              <Button type="link" size="small" disabled={loading} onClick={() => void sendMessage(text)}>
+                重新请求模型
+              </Button>
+            );
+          },
+        },
       } as const),
-    [collapsedToolKeys]
+    [collapsedToolKeys, loading]
   );
 
   useEffect(() => {
