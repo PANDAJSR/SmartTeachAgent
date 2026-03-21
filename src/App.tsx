@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Actions, Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Button, Card, Space, Typography } from "antd";
+import { Button, Card, Space, Tooltip, Typography } from "antd";
 import SettingsModal from "./components/SettingsModal";
 
 type Role = "user" | "ai";
@@ -103,6 +103,13 @@ type McpTestResult = {
 };
 
 const MAX_HISTORY_TURNS = 24;
+const ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-tiny";
+
+type AsrResult = {
+  text?: string;
+};
+
+type AsrPipeline = (audio: Float32Array, options?: Record<string, unknown>) => Promise<AsrResult>;
 
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
@@ -220,6 +227,14 @@ function App() {
   const [mcpServers, setMcpServers] = useState<McpServerDraft[]>([createMcpServerDraft(0)]);
   const [mcpTestingMap, setMcpTestingMap] = useState<Record<string, boolean>>({});
   const [mcpTestResultMap, setMcpTestResultMap] = useState<Record<string, McpTestResult>>({});
+  const [recording, setRecording] = useState<boolean>(false);
+  const [transcribing, setTranscribing] = useState<boolean>(false);
+  const [asrError, setAsrError] = useState<string>("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const asrPipelineRef = useRef<AsrPipeline | null>(null);
+  const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
 
   const roles = useMemo(
     () =>
@@ -820,6 +835,166 @@ function App() {
     }
   };
 
+  const ensureAsrPipeline = async (): Promise<AsrPipeline> => {
+    if (asrPipelineRef.current) {
+      return asrPipelineRef.current;
+    }
+    if (asrPipelineLoadingRef.current) {
+      return asrPipelineLoadingRef.current;
+    }
+    const loadingTask = (async () => {
+      const { env, pipeline } = await import("@huggingface/transformers");
+      env.allowLocalModels = false;
+      const createPipeline = pipeline as (...args: unknown[]) => Promise<unknown>;
+      const transcriber = (await createPipeline(
+        "automatic-speech-recognition",
+        ASR_MODEL_ID
+      )) as AsrPipeline;
+      asrPipelineRef.current = transcriber;
+      return transcriber;
+    })();
+    asrPipelineLoadingRef.current = loadingTask;
+    try {
+      return await loadingTask;
+    } finally {
+      asrPipelineLoadingRef.current = null;
+    }
+  };
+
+  const decodeAudioBlob = async (blob: Blob): Promise<Float32Array> => {
+    const arrayBuffer = await blob.arrayBuffer();
+    const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error("当前环境不支持音频解码");
+    }
+    const audioContext = new AudioContextCtor({ sampleRate: 16000 });
+    try {
+      const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+      const channelCount = decoded.numberOfChannels;
+      const length = decoded.length;
+      if (channelCount === 1) {
+        return new Float32Array(decoded.getChannelData(0));
+      }
+      const mixed = new Float32Array(length);
+      for (let i = 0; i < channelCount; i += 1) {
+        const channelData = decoded.getChannelData(i);
+        for (let j = 0; j < length; j += 1) {
+          mixed[j] += channelData[j] / channelCount;
+        }
+      }
+      return mixed;
+    } finally {
+      await audioContext.close();
+    }
+  };
+
+  const appendTranscript = (text: string): void => {
+    const clean = text.trim();
+    if (!clean) {
+      return;
+    }
+    setInput((prev) => {
+      const base = prev.trim();
+      return base ? `${base}${base.endsWith(" ") ? "" : " "}${clean}` : clean;
+    });
+  };
+
+  const transcribeAudio = async (blob: Blob): Promise<void> => {
+    setTranscribing(true);
+    setAsrError("");
+    try {
+      const [transcriber, audio] = await Promise.all([ensureAsrPipeline(), decodeAudioBlob(blob)]);
+      const result = await transcriber(audio, { language: "zh", task: "transcribe" });
+      const text = String(result?.text || "").trim();
+      if (!text) {
+        throw new Error("未识别到语音内容，请重试");
+      }
+      appendTranscript(text);
+    } catch (error) {
+      setAsrError(error instanceof Error ? error.message : "语音识别失败");
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const stopMediaTracks = (): void => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  };
+
+  const startRecording = async (): Promise<void> => {
+    if (recording || transcribing || loading) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setAsrError("当前环境不支持麦克风录音");
+      return;
+    }
+    setAsrError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const preferredMimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: preferredMimeType });
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        const recordedBlob = new Blob(audioChunksRef.current, { type: preferredMimeType });
+        audioChunksRef.current = [];
+        mediaRecorderRef.current = null;
+        setRecording(false);
+        stopMediaTracks();
+        if (recordedBlob.size > 0) {
+          void transcribeAudio(recordedBlob);
+        }
+      };
+      recorder.start();
+      setRecording(true);
+    } catch (error) {
+      stopMediaTracks();
+      setRecording(false);
+      setAsrError(error instanceof Error ? error.message : "无法启动录音");
+    }
+  };
+
+  const stopRecording = (): void => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      setRecording(false);
+      stopMediaTracks();
+      return;
+    }
+    if (recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  };
+
+  const toggleRecording = (): void => {
+    if (recording) {
+      stopRecording();
+      return;
+    }
+    void startRecording();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      stopMediaTracks();
+    };
+  }, []);
+
   return (
     <main className="page">
       <Card className="chat-card" variant="borderless">
@@ -882,7 +1057,46 @@ function App() {
                 submitType="enter"
                 autoSize={{ minRows: 2, maxRows: 6 }}
                 disabled={!activeConversation}
+                suffix={(oriNode) => (
+                  <Space size={4}>
+                    <Tooltip
+                      title={
+                        recording
+                          ? "点击停止录音"
+                          : transcribing
+                            ? "正在识别语音，请稍候"
+                            : "点击开始语音输入"
+                      }
+                    >
+                      <Button
+                        type={recording ? "primary" : "text"}
+                        danger={recording}
+                        shape="circle"
+                        aria-label={recording ? "停止语音输入" : "开始语音输入"}
+                        title={recording ? "停止语音输入" : "开始语音输入"}
+                        icon={
+                          <i
+                            className={recording ? "fa-solid fa-stop" : "fa-solid fa-microphone"}
+                            aria-hidden="true"
+                          />
+                        }
+                        onClick={toggleRecording}
+                        disabled={!activeConversation || loading || transcribing}
+                      />
+                    </Tooltip>
+                    {oriNode}
+                  </Space>
+                )}
               />
+              {(recording || transcribing || asrError) && (
+                <Typography.Text type={asrError ? "danger" : "secondary"}>
+                  {asrError
+                    ? `语音输入失败：${asrError}`
+                    : recording
+                      ? "录音中，点击麦克风按钮结束并开始识别..."
+                      : `正在加载并运行语音识别模型（${ASR_MODEL_ID}）...`}
+                </Typography.Text>
+              )}
             </Space>
           </section>
         </div>
