@@ -1097,6 +1097,7 @@ function App() {
 
       const synthesizeSpeechStream = window.smartTeach?.synthesizeSpeechStream;
       if (synthesizeSpeechStream) {
+        let firstChunkReceived = false;
         const streamResult = await synthesizeSpeechStream(
           {
             text: clean,
@@ -1108,20 +1109,27 @@ function App() {
               return;
             }
             if (event.type === "chunk") {
+              if (!firstChunkReceived) {
+                firstChunkReceived = true;
+                setTtsGenerating(false);
+              }
               pushTtsChunk(decodeBase64ToUint8Array(event.chunkBase64));
               return;
             }
             if (event.type === "done") {
+              setTtsGenerating(false);
               ttsStreamDoneRef.current = true;
               pumpTtsQueue();
               return;
             }
             if (event.type === "stopped") {
+              setTtsGenerating(false);
               ttsStreamDoneRef.current = true;
               pumpTtsQueue();
               return;
             }
             if (event.type === "error") {
+              setTtsGenerating(false);
               setTtsError(event.error || "语音流生成失败");
               stopTtsPlayback();
             }
@@ -1144,6 +1152,7 @@ function App() {
       if (!ttsResult.ok) {
         throw new Error(ttsResult.error || "语音合成失败");
       }
+      setTtsGenerating(false);
       pushTtsChunk(decodeBase64ToUint8Array(ttsResult.audioBase64));
       ttsStreamDoneRef.current = true;
       pumpTtsQueue();
