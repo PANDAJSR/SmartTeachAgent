@@ -58,12 +58,12 @@ type ChatHistoryTurn = {
 
 type AppConfig = {
   mcp: {
-    macHttpServer: {
+    httpServers: Array<{
       enabled: boolean;
       name: string;
       url: string;
       headers: Record<string, string>;
-    };
+    }>;
   };
 };
 
@@ -77,12 +77,7 @@ const LOG_PREFIX = "[SmartTeachAgent][main]";
 function createDefaultConfig(): AppConfig {
   return {
     mcp: {
-      macHttpServer: {
-        enabled: false,
-        name: "mac-http",
-        url: "",
-        headers: {},
-      },
+      httpServers: [],
     },
   };
 }
@@ -97,32 +92,42 @@ function normalizeAppConfig(raw: unknown): AppConfig {
   if (!rawMcp || typeof rawMcp !== "object") {
     return defaultConfig;
   }
-  const rawServer = (rawMcp as { macHttpServer?: unknown }).macHttpServer;
-  if (!rawServer || typeof rawServer !== "object") {
-    return defaultConfig;
+  const normalizeServer = (rawServer: unknown, index: number) => {
+    if (!rawServer || typeof rawServer !== "object") {
+      return null;
+    }
+    const enabled = Boolean((rawServer as { enabled?: unknown }).enabled);
+    const name =
+      String((rawServer as { name?: unknown }).name || `http-server-${index + 1}`).trim() ||
+      `http-server-${index + 1}`;
+    const url = String((rawServer as { url?: unknown }).url || "").trim();
+    const rawHeaders = (rawServer as { headers?: unknown }).headers;
+    const headers =
+      rawHeaders && typeof rawHeaders === "object"
+        ? Object.fromEntries(
+            Object.entries(rawHeaders as Record<string, unknown>).map(([key, value]) => [key, String(value)])
+          )
+        : {};
+    return { enabled, name, url, headers };
+  };
+
+  const rawHttpServers = (rawMcp as { httpServers?: unknown }).httpServers;
+  if (Array.isArray(rawHttpServers)) {
+    return {
+      mcp: {
+        httpServers: rawHttpServers
+          .map((item, index) => normalizeServer(item, index))
+          .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+      },
+    };
   }
 
-  const enabled = Boolean((rawServer as { enabled?: unknown }).enabled);
-  const name = String((rawServer as { name?: unknown }).name || "mac-http").trim() || "mac-http";
-  const url = String((rawServer as { url?: unknown }).url || "").trim();
-  const rawHeaders = (rawServer as { headers?: unknown }).headers;
-  const headers =
-    rawHeaders && typeof rawHeaders === "object"
-      ? Object.fromEntries(
-          Object.entries(rawHeaders as Record<string, unknown>).map(([key, value]) => [key, String(value)])
-        )
-      : {};
-
-  return {
-    mcp: {
-      macHttpServer: {
-        enabled,
-        name,
-        url,
-        headers,
-      },
-    },
-  };
+  const legacyServer = (rawMcp as { macHttpServer?: unknown }).macHttpServer;
+  const legacyNormalized = normalizeServer(legacyServer, 0);
+  if (!legacyNormalized) {
+    return defaultConfig;
+  }
+  return { mcp: { httpServers: [legacyNormalized] } };
 }
 
 async function readAppConfig(): Promise<AppConfig> {
@@ -142,6 +147,27 @@ async function writeAppConfig(config: unknown): Promise<AppConfig> {
   await fs.mkdir(path.dirname(configFilePath), { recursive: true });
   await fs.writeFile(configFilePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
   return normalized;
+}
+
+function buildMcpServers(config: AppConfig): Record<string, { type: "http"; url: string; headers?: Record<string, string> }> {
+  const result: Record<string, { type: "http"; url: string; headers?: Record<string, string> }> = {};
+  const usedNames = new Set<string>();
+  for (const [index, server] of config.mcp.httpServers.entries()) {
+    if (!server.enabled || !server.url) {
+      continue;
+    }
+    let name = server.name.trim() || `http-server-${index + 1}`;
+    if (usedNames.has(name)) {
+      name = `${name}-${index + 1}`;
+    }
+    usedNames.add(name);
+    result[name] = {
+      type: "http",
+      url: server.url,
+      headers: Object.keys(server.headers).length > 0 ? server.headers : undefined,
+    };
+  }
+  return result;
 }
 
 function logInfo(message: string, extra?: unknown): void {
@@ -507,15 +533,9 @@ async function runClaudeChat(
   options.agentProgressSummaries = true;
   options.abortController = abortController;
   const appConfig = await readAppConfig();
-  const mcpServer = appConfig.mcp.macHttpServer;
-  if (mcpServer.enabled && mcpServer.url) {
-    options.mcpServers = {
-      [mcpServer.name]: {
-        type: "http",
-        url: mcpServer.url,
-        headers: Object.keys(mcpServer.headers).length > 0 ? mcpServer.headers : undefined,
-      },
-    };
+  const mcpServers = buildMcpServers(appConfig);
+  if (Object.keys(mcpServers).length > 0) {
+    options.mcpServers = mcpServers;
   }
   logInfo(`[${debugTag}] Claude options`, sanitizeClaudeOptions(options));
   emitProgress();
@@ -881,9 +901,7 @@ ipcMain.handle("config-file:read", async () => {
 ipcMain.handle("config-file:write", async (_event, payload?: { config?: unknown }) => {
   logInfo(`[config-file:write] 写入 ${configFilePath}`);
   const config = await writeAppConfig(payload?.config);
-  logInfo(
-    `[config-file:write] mcp enabled=${config.mcp.macHttpServer.enabled} url=${Boolean(config.mcp.macHttpServer.url)}`
-  );
+  logInfo(`[config-file:write] mcp httpServers=${config.mcp.httpServers.length}`);
   return { ok: true, path: configFilePath, config };
 });
 

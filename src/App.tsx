@@ -74,6 +74,12 @@ type ChatHistoryTurn = {
 
 type AppConfig = {
   mcp?: {
+    httpServers?: Array<{
+      enabled?: boolean;
+      name?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }>;
     macHttpServer?: {
       enabled?: boolean;
       name?: string;
@@ -81,6 +87,14 @@ type AppConfig = {
       headers?: Record<string, string>;
     };
   };
+};
+
+type McpServerDraft = {
+  id: string;
+  enabled: boolean;
+  name: string;
+  url: string;
+  headersText: string;
 };
 
 const MAX_HISTORY_TURNS = 24;
@@ -170,6 +184,14 @@ const buildHistoryTurns = (items: ChatItem[]): ChatHistoryTurn[] =>
     }))
     .slice(-MAX_HISTORY_TURNS);
 
+const createMcpServerDraft = (index = 0): McpServerDraft => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${index}`,
+  enabled: false,
+  name: `http-server-${index + 1}`,
+  url: "",
+  headersText: "",
+});
+
 function App() {
   const initialConversation = createConversation(1);
   const [input, setInput] = useState<string>("");
@@ -190,10 +212,7 @@ function App() {
   const [configSaving, setConfigSaving] = useState<boolean>(false);
   const [configError, setConfigError] = useState<string>("");
   const [configNotice, setConfigNotice] = useState<string>("");
-  const [mcpEnabled, setMcpEnabled] = useState<boolean>(false);
-  const [mcpServerName, setMcpServerName] = useState<string>("mac-http");
-  const [mcpServerUrl, setMcpServerUrl] = useState<string>("");
-  const [mcpHeadersText, setMcpHeadersText] = useState<string>("");
+  const [mcpServers, setMcpServers] = useState<McpServerDraft[]>([createMcpServerDraft(0)]);
 
   const roles = useMemo(
     () =>
@@ -547,15 +566,45 @@ function App() {
       const data = await readConfigFile();
       setConfigPath(data.path);
       const config = data.config || {};
-      const server = config.mcp?.macHttpServer || {};
-      setMcpEnabled(Boolean(server.enabled));
-      setMcpServerName((server.name || "mac-http").trim() || "mac-http");
-      setMcpServerUrl((server.url || "").trim());
-      setMcpHeadersText(
-        server.headers && Object.keys(server.headers).length > 0
-          ? JSON.stringify(server.headers, null, 2)
-          : ""
-      );
+      const httpServers = config.mcp?.httpServers;
+      if (Array.isArray(httpServers) && httpServers.length > 0) {
+        setMcpServers(
+          httpServers.map((server, index) => ({
+            id: createMcpServerDraft(index).id,
+            enabled: Boolean(server.enabled),
+            name: (server.name || `http-server-${index + 1}`).trim() || `http-server-${index + 1}`,
+            url: (server.url || "").trim(),
+            headersText:
+              server.headers && Object.keys(server.headers).length > 0
+                ? JSON.stringify(server.headers, null, 2)
+                : "",
+          }))
+        );
+      } else {
+        const legacyServer = (config.mcp as { macHttpServer?: {
+          enabled?: boolean;
+          name?: string;
+          url?: string;
+          headers?: Record<string, string>;
+        } } | undefined)?.macHttpServer;
+        if (legacyServer) {
+          const server = legacyServer;
+        setMcpServers([
+          {
+            id: createMcpServerDraft(0).id,
+            enabled: Boolean(server.enabled),
+            name: (server.name || "http-server-1").trim() || "http-server-1",
+            url: (server.url || "").trim(),
+            headersText:
+              server.headers && Object.keys(server.headers).length > 0
+                ? JSON.stringify(server.headers, null, 2)
+                : "",
+          },
+        ]);
+        } else {
+          setMcpServers([createMcpServerDraft(0)]);
+        }
+      }
       console.info(`${UI_LOG_PREFIX} loadConfigFile success path=${data.path}`);
     } catch (error) {
       console.error(`${UI_LOG_PREFIX} loadConfigFile failed`, error);
@@ -571,6 +620,21 @@ function App() {
     setConfigNotice("");
     await Promise.all([loadEnvFile(), loadConfigFile()]);
     setSettingsLoading(false);
+  };
+
+  const addMcpServer = (): void => {
+    setMcpServers((prev) => [...prev, createMcpServerDraft(prev.length)]);
+  };
+
+  const removeMcpServer = (id: string): void => {
+    setMcpServers((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      return next.length > 0 ? next : [createMcpServerDraft(0)];
+    });
+  };
+
+  const updateMcpServer = (id: string, patch: Partial<Omit<McpServerDraft, "id">>): void => {
+    setMcpServers((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
   const saveEnvFile = async (): Promise<void> => {
@@ -604,30 +668,35 @@ function App() {
       return;
     }
 
-    let headers: Record<string, string> | undefined;
-    const cleanHeadersText = mcpHeadersText.trim();
-    if (cleanHeadersText) {
-      try {
-        const parsed = JSON.parse(cleanHeadersText) as Record<string, unknown>;
-        headers = Object.fromEntries(
-          Object.entries(parsed).map(([key, value]) => [key, String(value)])
-        );
-      } catch {
-        setConfigError("请求头 JSON 格式错误，请检查后重试。");
-        return;
+    const httpServers: NonNullable<NonNullable<AppConfig["mcp"]>["httpServers"]> = [];
+    for (const [index, server] of mcpServers.entries()) {
+      let headers: Record<string, string> | undefined;
+      const cleanHeadersText = server.headersText.trim();
+      if (cleanHeadersText) {
+        try {
+          const parsed = JSON.parse(cleanHeadersText) as Record<string, unknown>;
+          headers = Object.fromEntries(
+            Object.entries(parsed).map(([key, value]) => [key, String(value)])
+          );
+        } catch {
+          setConfigError(`服务器 ${index + 1} 的请求头 JSON 格式错误，请检查后重试。`);
+          return;
+        }
       }
+      const cleanName = server.name.trim() || `http-server-${index + 1}`;
+      const cleanUrl = server.url.trim();
+      if (!cleanUrl && !server.enabled && !cleanHeadersText && !server.name.trim()) {
+        continue;
+      }
+      httpServers.push({
+        enabled: server.enabled,
+        name: cleanName,
+        url: cleanUrl,
+        headers,
+      });
     }
 
-    const nextConfig: AppConfig = {
-      mcp: {
-        macHttpServer: {
-          enabled: mcpEnabled,
-          name: mcpServerName.trim() || "mac-http",
-          url: mcpServerUrl.trim(),
-          headers,
-        },
-      },
-    };
+    const nextConfig: AppConfig = { mcp: { httpServers } };
 
     setConfigSaving(true);
     setConfigError("");
@@ -728,14 +797,10 @@ function App() {
         configSaving={configSaving}
         configError={configError}
         configNotice={configNotice}
-        mcpEnabled={mcpEnabled}
-        mcpServerName={mcpServerName}
-        mcpServerUrl={mcpServerUrl}
-        mcpHeadersText={mcpHeadersText}
-        onChangeMcpEnabled={setMcpEnabled}
-        onChangeMcpServerName={setMcpServerName}
-        onChangeMcpServerUrl={setMcpServerUrl}
-        onChangeMcpHeadersText={setMcpHeadersText}
+        mcpServers={mcpServers}
+        onAddMcpServer={addMcpServer}
+        onRemoveMcpServer={removeMcpServer}
+        onChangeMcpServer={updateMcpServer}
         onSaveConfig={saveConfigFile}
       />
     </main>

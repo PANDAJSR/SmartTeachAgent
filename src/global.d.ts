@@ -48,12 +48,12 @@ type ChatHistoryTurn = {
 
 type AppConfig = {
   mcp?: {
-    macHttpServer?: {
+    httpServers?: Array<{
       enabled?: boolean;
       name?: string;
       url?: string;
       headers?: Record<string, string>;
-    };
+    }>;
   };
 };
 

@@ -1,6 +1,14 @@
 import Editor from "@monaco-editor/react";
 import { Button, Divider, Input, Modal, Space, Switch, Typography } from "antd";
 
+type McpServerDraft = {
+  id: string;
+  enabled: boolean;
+  name: string;
+  url: string;
+  headersText: string;
+};
+
 type SettingsModalProps = {
   open: boolean;
   loading: boolean;
@@ -17,14 +25,10 @@ type SettingsModalProps = {
   configSaving: boolean;
   configError: string;
   configNotice: string;
-  mcpEnabled: boolean;
-  mcpServerName: string;
-  mcpServerUrl: string;
-  mcpHeadersText: string;
-  onChangeMcpEnabled: (value: boolean) => void;
-  onChangeMcpServerName: (value: string) => void;
-  onChangeMcpServerUrl: (value: string) => void;
-  onChangeMcpHeadersText: (value: string) => void;
+  mcpServers: McpServerDraft[];
+  onAddMcpServer: () => void;
+  onRemoveMcpServer: (id: string) => void;
+  onChangeMcpServer: (id: string, patch: Partial<Omit<McpServerDraft, "id">>) => void;
   onSaveConfig: () => Promise<void>;
 };
 
@@ -45,14 +49,10 @@ function SettingsModal(props: SettingsModalProps) {
     configSaving,
     configError,
     configNotice,
-    mcpEnabled,
-    mcpServerName,
-    mcpServerUrl,
-    mcpHeadersText,
-    onChangeMcpEnabled,
-    onChangeMcpServerName,
-    onChangeMcpServerUrl,
-    onChangeMcpHeadersText,
+    mcpServers,
+    onAddMcpServer,
+    onRemoveMcpServer,
+    onChangeMcpServer,
     onSaveConfig,
   } = props;
 
@@ -73,41 +73,70 @@ function SettingsModal(props: SettingsModalProps) {
       <Space direction="vertical" size={20} style={{ width: "100%" }}>
         <div>
           <Typography.Title level={5} style={{ marginTop: 0 }}>
-            MCP 配置
+            HTTP MCP 服务器
           </Typography.Title>
           <Space direction="vertical" size={8} style={{ width: "100%" }}>
             <Typography.Text type="secondary">配置文件：{configPath}</Typography.Text>
             {configError ? <Typography.Text type="danger">{configError}</Typography.Text> : null}
             {configNotice ? <Typography.Text type="success">{configNotice}</Typography.Text> : null}
 
-            <Space size={12} align="center" wrap>
-              <Typography.Text>启用 Mac HTTP MCP 服务器</Typography.Text>
-              <Switch checked={mcpEnabled} onChange={onChangeMcpEnabled} disabled={loading} />
+            {mcpServers.map((server, index) => (
+              <div key={server.id} className="mcp-server-item">
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  <Space align="center" style={{ width: "100%", justifyContent: "space-between" }}>
+                    <Typography.Text strong>服务器 {index + 1}</Typography.Text>
+                    <Button
+                      danger
+                      type="text"
+                      onClick={() => onRemoveMcpServer(server.id)}
+                      disabled={loading || mcpServers.length <= 1}
+                    >
+                      删除
+                    </Button>
+                  </Space>
+
+                  <Space size={12} align="center" wrap>
+                    <Typography.Text>启用</Typography.Text>
+                    <Switch
+                      checked={server.enabled}
+                      onChange={(value) => onChangeMcpServer(server.id, { enabled: value })}
+                      disabled={loading}
+                    />
+                  </Space>
+
+                  <Input
+                    value={server.name}
+                    onChange={(event) => onChangeMcpServer(server.id, { name: event.target.value })}
+                    placeholder="服务器名称，例如 mac-mini"
+                    disabled={loading}
+                  />
+                  <Input
+                    value={server.url}
+                    onChange={(event) => onChangeMcpServer(server.id, { url: event.target.value })}
+                    placeholder="HTTP 地址，例如 http://192.168.1.8:8787/mcp"
+                    disabled={loading}
+                  />
+                  <Input.TextArea
+                    value={server.headersText}
+                    onChange={(event) =>
+                      onChangeMcpServer(server.id, { headersText: event.target.value })
+                    }
+                    placeholder='可选：请求头 JSON，例如 {"Authorization":"Bearer xxx"}'
+                    autoSize={{ minRows: 3, maxRows: 6 }}
+                    disabled={loading}
+                  />
+                </Space>
+              </div>
+            ))}
+
+            <Space size={8} wrap>
+              <Button onClick={onAddMcpServer} disabled={loading}>
+                新增服务器
+              </Button>
+              <Button type="primary" onClick={() => void onSaveConfig()} loading={configSaving}>
+                保存 MCP 配置
+              </Button>
             </Space>
-
-            <Input
-              value={mcpServerName}
-              onChange={(event) => onChangeMcpServerName(event.target.value)}
-              placeholder="服务器名称，例如 mac-http"
-              disabled={loading}
-            />
-            <Input
-              value={mcpServerUrl}
-              onChange={(event) => onChangeMcpServerUrl(event.target.value)}
-              placeholder="HTTP 地址，例如 http://192.168.1.8:8787/mcp"
-              disabled={loading}
-            />
-            <Input.TextArea
-              value={mcpHeadersText}
-              onChange={(event) => onChangeMcpHeadersText(event.target.value)}
-              placeholder='可选：请求头 JSON，例如 {"Authorization":"Bearer xxx"}'
-              autoSize={{ minRows: 3, maxRows: 6 }}
-              disabled={loading}
-            />
-
-            <Button type="primary" onClick={() => void onSaveConfig()} loading={configSaving}>
-              保存 MCP 配置
-            </Button>
           </Space>
         </div>
 

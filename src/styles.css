@@ -106,6 +106,13 @@ body {
   overflow: auto;
 }
 
+.mcp-server-item {
+  border: 1px solid #e6efff;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9fbff;
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 12px;
