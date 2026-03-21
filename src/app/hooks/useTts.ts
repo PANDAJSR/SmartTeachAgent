@@ -90,6 +90,7 @@ export function useTts(): UseTtsResult {
     if (!merged.length) {
       throw new Error("未收到可播放的音频数据");
     }
+    console.info(`[TTS][${requestId}] 开始播放音频，chunkCount=${chunks.length}, totalBytes=${merged.length}`);
 
     const arrayBuffer = new ArrayBuffer(merged.byteLength);
     new Uint8Array(arrayBuffer).set(merged);
@@ -98,7 +99,20 @@ export function useTts(): UseTtsResult {
     ttsAudioUrlRef.current = objectUrl;
 
     const audio = ensureAudioElement();
+    audio.onloadedmetadata = () => {
+      console.info(`[TTS][${requestId}] loadedmetadata，duration=${audio.duration}`);
+    };
+    audio.oncanplay = () => {
+      console.info(`[TTS][${requestId}] canplay，readyState=${audio.readyState}`);
+    };
+    audio.onplaying = () => {
+      console.info(`[TTS][${requestId}] playing`);
+    };
+    audio.onpause = () => {
+      console.info(`[TTS][${requestId}] pause`);
+    };
     audio.onended = () => {
+      console.info(`[TTS][${requestId}] ended`);
       setTtsPlaying(false);
       if (ttsRequestIdRef.current === requestId) {
         ttsRequestIdRef.current = null;
@@ -106,6 +120,9 @@ export function useTts(): UseTtsResult {
       resetTtsAudioSource();
     };
     audio.onerror = () => {
+      console.error(
+        `[TTS][${requestId}] audio error，errorCode=${audio.error?.code || "unknown"}，readyState=${audio.readyState}，networkState=${audio.networkState}`
+      );
       setTtsPlaying(false);
       if (ttsRequestIdRef.current === requestId) {
         ttsRequestIdRef.current = null;
@@ -118,6 +135,7 @@ export function useTts(): UseTtsResult {
     audio.load();
     setTtsPlaying(true);
     await audio.play();
+    console.info(`[TTS][${requestId}] play() resolved`);
   };
 
   const playTtsText = async (text: string): Promise<void> => {

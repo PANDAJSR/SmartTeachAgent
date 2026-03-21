@@ -6,6 +6,7 @@ import { createLogger } from "./backend/shared/logger";
 import { envFilePath } from "./backend/shared/paths";
 
 const { logInfo, logError } = createLogger("[SmartTeachAgent][main]");
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 const envLoadResult = dotenv.config({ path: envFilePath, override: true });
 if (envLoadResult.error) {
