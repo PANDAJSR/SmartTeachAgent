@@ -158,46 +158,86 @@ export function useTts(): UseTtsResult {
         const streamChunks: Uint8Array[] = [];
         let firstChunkReceived = false;
         let streamStopped = false;
+        let streamAbandoned = false;
+        let clearFirstChunkTimeout: (() => void) | null = null;
+        const clearFirstChunkTimer = (): void => {
+          if (typeof clearFirstChunkTimeout === "function") {
+            clearFirstChunkTimeout();
+            clearFirstChunkTimeout = null;
+          }
+        };
         console.info(`[TTS][${requestId}] 使用流式合成`);
 
-        const streamResult = await synthesizeSpeechStream(
-          {
-            text: clean,
-            requestId,
-            voice: DEFAULT_EDGE_TTS_VOICE,
-          },
-          (event) => {
-            if (ttsRequestIdRef.current !== requestId) {
-              return;
-            }
-            if (event.type === "chunk") {
-              const chunk = decodeBase64ToUint8Array(event.chunkBase64);
-              if (chunk.length) {
-                streamChunks.push(chunk);
-                if (!firstChunkReceived) {
-                  firstChunkReceived = true;
-                  console.info(`[TTS][${requestId}] 收到首个音频分片`);
+        const firstChunkTimeoutMs = 6000;
+        const firstChunkTimeoutPromise = new Promise<never>((_, reject) => {
+          const timer = window.setTimeout(() => {
+            reject(new Error(`流式首包超时（${firstChunkTimeoutMs}ms）`));
+          }, firstChunkTimeoutMs);
+          clearFirstChunkTimeout = () => {
+            window.clearTimeout(timer);
+          };
+        });
+
+        let streamResult: { ok?: boolean; stopped?: boolean; error?: string } | undefined;
+        try {
+          streamResult = await Promise.race([
+            synthesizeSpeechStream(
+              {
+                text: clean,
+                requestId,
+                voice: DEFAULT_EDGE_TTS_VOICE,
+              },
+              (event) => {
+                if (streamAbandoned || ttsRequestIdRef.current !== requestId) {
+                  return;
+                }
+                if (event.type === "chunk") {
+                  const chunk = decodeBase64ToUint8Array(event.chunkBase64);
+                  if (chunk.length) {
+                    streamChunks.push(chunk);
+                    if (!firstChunkReceived) {
+                      firstChunkReceived = true;
+                      clearFirstChunkTimer();
+                      console.info(`[TTS][${requestId}] 收到首个音频分片`);
+                      setTtsGenerating(false);
+                    }
+                  }
+                  return;
+                }
+                if (event.type === "done" || event.type === "stopped") {
+                  console.info(`[TTS][${requestId}] 流结束，type=${event.type}`);
+                  if (event.type === "stopped") {
+                    streamStopped = true;
+                  }
+                  clearFirstChunkTimer();
                   setTtsGenerating(false);
+                  return;
+                }
+                if (event.type === "error") {
+                  console.error(`[TTS][${requestId}] 流错误: ${event.error || "语音流生成失败"}`);
+                  clearFirstChunkTimer();
+                  setTtsGenerating(false);
+                  setTtsError(event.error || "语音流生成失败");
+                  stopTtsPlayback();
                 }
               }
-              return;
-            }
-            if (event.type === "done" || event.type === "stopped") {
-              console.info(`[TTS][${requestId}] 流结束，type=${event.type}`);
-              if (event.type === "stopped") {
-                streamStopped = true;
-              }
-              setTtsGenerating(false);
-              return;
-            }
-            if (event.type === "error") {
-              console.error(`[TTS][${requestId}] 流错误: ${event.error || "语音流生成失败"}`);
-              setTtsGenerating(false);
-              setTtsError(event.error || "语音流生成失败");
-              stopTtsPlayback();
-            }
+            ),
+            firstChunkTimeoutPromise,
+          ]);
+          console.info(`[TTS][${requestId}] 流式请求已返回`);
+        } catch (streamError) {
+          clearFirstChunkTimer();
+          streamAbandoned = true;
+          console.warn(
+            `[TTS][${requestId}] 流式请求等待失败，准备回退非流式: ${
+              streamError instanceof Error ? streamError.message : "unknown"
+            }`
+          );
+          if (window.smartTeach?.stopSpeech) {
+            void window.smartTeach.stopSpeech(requestId);
           }
-        );
+          streamResult = undefined;
+        }
 
         if (streamResult?.error) {
           console.error(`[TTS][${requestId}] 流请求返回错误: ${streamResult.error}`);
