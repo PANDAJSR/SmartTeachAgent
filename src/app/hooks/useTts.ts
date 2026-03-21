@@ -172,7 +172,16 @@ export function useTts(): UseTtsResult {
         resetTtsAudioSource();
       };
       setTtsPlaying(true);
-      await audio.play();
+      const playPromise = audio.play();
+      void playPromise.catch((error) => {
+        if (ttsRequestIdRef.current !== requestId) {
+          return;
+        }
+        setTtsPlaying(false);
+        ttsRequestIdRef.current = null;
+        setTtsError(error instanceof Error ? error.message : "音频播放失败，请重试");
+        resetTtsAudioSource();
+      });
 
       const synthesizeSpeechStream = window.smartTeach?.synthesizeSpeechStream;
       if (synthesizeSpeechStream) {
