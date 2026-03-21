@@ -1,6 +1,9 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_MAX_TURNS = 4;
+const DEFAULT_CLAUDE_WORKSPACE = join(homedir(), ".SmartTeachAgent", "workspace");
 
 function parseCsvEnv(value?: string): string[] | undefined {
   if (!value) {
@@ -37,6 +40,7 @@ export function buildClaudeOptions(): Options {
     maxTurns: Number(process.env.CLAUDE_MAX_TURNS || DEFAULT_MAX_TURNS),
     tools: { type: "preset", preset: "claude_code" },
     permissionMode,
+    cwd: DEFAULT_CLAUDE_WORKSPACE,
     env: {
       ...process.env,
     },
