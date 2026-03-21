@@ -27,7 +27,9 @@ function App() {
       asr.cleanupAsr();
       tts.cleanupTts();
     };
-  }, [asr, tts]);
+    // 仅在组件卸载时清理，避免因对象引用变化导致每次重渲染都触发 cleanup
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <main className="page">
