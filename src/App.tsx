@@ -322,57 +322,85 @@ function App() {
               />
             );
           },
-          footer: () => null,
-        },
-        user: {
-          placement: "end",
-          variant: "filled",
-          footerPlacement: "outer-end",
-          footer: (content: string) => {
-            const text = String(content || "").trim();
-            if (!text) {
+          footerPlacement: "outer-start",
+          footer: (content: string, info: { key?: string | number; status?: string }) => {
+            if (info?.status !== "success") {
+              return null;
+            }
+            const aiKey = String(info?.key || "");
+            if (!aiKey) {
+              return null;
+            }
+            const currentConversation = conversations.find(
+              (conversation) => conversation.id === activeConversationId
+            );
+            const items = currentConversation?.items || [];
+            const aiIndex = items.findIndex((item) => item.key === aiKey);
+            const retryTarget =
+              aiIndex > 0
+                ? [...items.slice(0, aiIndex)]
+                    .reverse()
+                    .find((item) => item.role === "user" && item.content.trim())
+                : undefined;
+            const aiText = String(content || "").trim();
+            if (!retryTarget && !aiText) {
               return null;
             }
             return (
               <Actions
                 variant="borderless"
                 items={[
-                  {
-                    key: "retry-request",
-                    icon: <i className="fa-solid fa-rotate-right" aria-hidden="true" />,
-                    label: "重新生成",
-                    onItemClick: () => {
-                      if (!loading) {
-                        void sendMessage(text);
-                      }
-                    },
-                  },
-                  {
-                    key: "speak-request",
-                    icon: (
-                      <i
-                        className={ttsPlaying ? "fa-solid fa-stop" : "fa-solid fa-volume-high"}
-                        aria-hidden="true"
-                      />
-                    ),
-                    label: ttsPlaying ? "停止朗读" : "朗读",
-                    onItemClick: () => {
-                      if (ttsPlaying) {
-                        stopTtsPlayback();
-                        return;
-                      }
-                      if (!ttsGenerating) {
-                        void playTtsText(text);
-                      }
-                    },
-                  },
+                  ...(retryTarget
+                    ? [
+                        {
+                          key: "retry-request",
+                          icon: <i className="fa-solid fa-rotate-right" aria-hidden="true" />,
+                          label: "重新生成",
+                          onItemClick: () => {
+                            if (!loading) {
+                              void sendMessage(retryTarget.content);
+                            }
+                          },
+                        },
+                      ]
+                    : []),
+                  ...(aiText
+                    ? [
+                        {
+                          key: "speak-request",
+                          icon: (
+                            <i
+                              className={
+                                ttsGenerating ? "fa-solid fa-spinner fa-spin" : ttsPlaying ? "fa-solid fa-stop" : "fa-solid fa-volume-high"
+                              }
+                              aria-hidden="true"
+                            />
+                          ),
+                          label: ttsGenerating ? "生成中..." : ttsPlaying ? "停止朗读" : "朗读",
+                          onItemClick: () => {
+                            if (ttsPlaying) {
+                              stopTtsPlayback();
+                              return;
+                            }
+                            if (!ttsGenerating) {
+                              void playTtsText(aiText);
+                            }
+                          },
+                        },
+                      ]
+                    : []),
                 ]}
               />
             );
           },
         },
+        user: {
+          placement: "end",
+          variant: "filled",
+          footer: () => null,
+        },
       } as const),
-    [collapsedToolKeys, loading, ttsGenerating, ttsPlaying]
+    [activeConversationId, collapsedToolKeys, conversations, loading, ttsGenerating, ttsPlaying]
   );
 
   useEffect(() => {
