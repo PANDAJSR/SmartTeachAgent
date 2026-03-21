@@ -44,6 +44,7 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "monaco-editor": "^0.55.1",
+    "opencc-js": "^1.0.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

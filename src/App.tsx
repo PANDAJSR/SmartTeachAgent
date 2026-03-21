@@ -125,6 +125,7 @@ type AsrResult = {
 };
 
 type AsrPipeline = (audio: Float32Array, options?: Record<string, unknown>) => Promise<AsrResult>;
+type ChineseConverter = (input: string) => string;
 
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
@@ -253,6 +254,8 @@ function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const asrPipelineRef = useRef<{ modelId: string; pipeline: AsrPipeline } | null>(null);
   const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
+  const zhSimplifierRef = useRef<ChineseConverter | null>(null);
+  const zhSimplifierLoadingRef = useRef<Promise<ChineseConverter> | null>(null);
 
   const roles = useMemo(
     () =>
@@ -907,6 +910,45 @@ function App() {
     }
   };
 
+  const ensureZhSimplifier = async (): Promise<ChineseConverter> => {
+    if (zhSimplifierRef.current) {
+      return zhSimplifierRef.current;
+    }
+    if (zhSimplifierLoadingRef.current) {
+      return zhSimplifierLoadingRef.current;
+    }
+    const loadingTask = (async () => {
+      const openccModule = await import("opencc-js");
+      const createConverter = (
+        openccModule as unknown as {
+          Converter: (options: { from: string; to: string }) => ChineseConverter;
+        }
+      ).Converter;
+      const converter = createConverter({ from: "tw", to: "cn" });
+      zhSimplifierRef.current = converter;
+      return converter;
+    })();
+    zhSimplifierLoadingRef.current = loadingTask;
+    try {
+      return await loadingTask;
+    } finally {
+      zhSimplifierLoadingRef.current = null;
+    }
+  };
+
+  const normalizeToSimplifiedChinese = async (text: string): Promise<string> => {
+    const clean = text.trim();
+    if (!clean) {
+      return clean;
+    }
+    try {
+      const converter = await ensureZhSimplifier();
+      return converter(clean);
+    } catch {
+      return clean;
+    }
+  };
+
   const appendTranscript = (text: string): void => {
     const clean = text.trim();
     if (!clean) {
@@ -928,7 +970,8 @@ function App() {
       if (!text) {
         throw new Error("未识别到语音内容，请重试");
       }
-      appendTranscript(text);
+      const simplifiedText = await normalizeToSimplifiedChinese(text);
+      appendTranscript(simplifiedText);
     } catch (error) {
       setAsrError(error instanceof Error ? error.message : "语音识别失败");
     } finally {
