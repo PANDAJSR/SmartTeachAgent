@@ -1,4 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -36,6 +37,9 @@ function resolvePermissionMode(): Options["permissionMode"] {
 
 export function buildClaudeOptions(): Options {
   const permissionMode = resolvePermissionMode();
+  // Ensure the custom Claude workspace exists; otherwise process spawn may fail with ENOENT.
+  mkdirSync(DEFAULT_CLAUDE_WORKSPACE, { recursive: true });
+
   const options: Options = {
     maxTurns: Number(process.env.CLAUDE_MAX_TURNS || DEFAULT_MAX_TURNS),
     tools: { type: "preset", preset: "claude_code" },
