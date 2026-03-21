@@ -49,7 +49,7 @@ function sanitizeClaudeOptions(options: ReturnType<typeof buildClaudeOptions>): 
   };
 }
 
-const envLoadResult = dotenv.config({ path: envFilePath });
+const envLoadResult = dotenv.config({ path: envFilePath, override: true });
 if (envLoadResult.error) {
   logError(`加载 env 失败，路径=${envFilePath}`, envLoadResult.error);
 } else {
