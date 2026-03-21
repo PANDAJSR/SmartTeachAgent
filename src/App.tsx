@@ -104,6 +104,7 @@ type McpTestResult = {
 
 const MAX_HISTORY_TURNS = 24;
 const DEFAULT_ASR_MODEL_ID = import.meta.env.VITE_ASR_MODEL_ID || "Xenova/whisper-base";
+const DEFAULT_TTS_MODEL_ID = import.meta.env.VITE_TTS_MODEL_ID || "Xenova/mms-tts-zho";
 const ASR_MODEL_OPTIONS = [
   {
     label: "极速（中文）",
@@ -126,6 +127,10 @@ type AsrResult = {
 
 type AsrPipeline = (audio: Float32Array, options?: Record<string, unknown>) => Promise<AsrResult>;
 type ChineseConverter = (input: string) => string;
+type TtsResult = {
+  toBlob: () => Blob;
+};
+type TtsPipeline = (text: string, options?: Record<string, unknown>) => Promise<TtsResult>;
 
 const createConversation = (index: number): Conversation => {
   const now = Date.now();
@@ -249,11 +254,18 @@ function App() {
   const [asrModelId, setAsrModelId] = useState<string>(DEFAULT_ASR_MODEL_ID);
   const [asrPreloading, setAsrPreloading] = useState<boolean>(false);
   const [asrReadyMap, setAsrReadyMap] = useState<Record<string, boolean>>({});
+  const [ttsGenerating, setTtsGenerating] = useState<boolean>(false);
+  const [ttsPlaying, setTtsPlaying] = useState<boolean>(false);
+  const [ttsError, setTtsError] = useState<string>("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const asrPipelineRef = useRef<{ modelId: string; pipeline: AsrPipeline } | null>(null);
   const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
+  const ttsPipelineRef = useRef<{ modelId: string; pipeline: TtsPipeline } | null>(null);
+  const ttsPipelineLoadingRef = useRef<Promise<TtsPipeline> | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsAudioUrlRef = useRef<string | null>(null);
   const zhSimplifierRef = useRef<ChineseConverter | null>(null);
   const zhSimplifierLoadingRef = useRef<Promise<ChineseConverter> | null>(null);
 
@@ -328,9 +340,29 @@ function App() {
                   {
                     key: "retry-request",
                     icon: <i className="fa-solid fa-rotate-right" aria-hidden="true" />,
+                    label: "重新生成",
                     onItemClick: () => {
                       if (!loading) {
                         void sendMessage(text);
+                      }
+                    },
+                  },
+                  {
+                    key: "speak-request",
+                    icon: (
+                      <i
+                        className={ttsPlaying ? "fa-solid fa-stop" : "fa-solid fa-volume-high"}
+                        aria-hidden="true"
+                      />
+                    ),
+                    label: ttsPlaying ? "停止朗读" : "朗读",
+                    onItemClick: () => {
+                      if (ttsPlaying) {
+                        stopTtsPlayback();
+                        return;
+                      }
+                      if (!ttsGenerating) {
+                        void playTtsText(text);
                       }
                     },
                   },
@@ -340,7 +372,7 @@ function App() {
           },
         },
       } as const),
-    [collapsedToolKeys, loading]
+    [collapsedToolKeys, loading, ttsGenerating, ttsPlaying]
   );
 
   useEffect(() => {
@@ -883,6 +915,89 @@ function App() {
     }
   };
 
+  const ensureTtsPipeline = async (modelId: string): Promise<TtsPipeline> => {
+    if (ttsPipelineRef.current?.modelId === modelId) {
+      return ttsPipelineRef.current.pipeline;
+    }
+    if (ttsPipelineLoadingRef.current) {
+      return ttsPipelineLoadingRef.current;
+    }
+    const loadingTask = (async () => {
+      const { env, pipeline } = await import("@huggingface/transformers");
+      env.allowLocalModels = false;
+      const createPipeline = pipeline as (...args: unknown[]) => Promise<unknown>;
+      const synthesizer = (await createPipeline("text-to-speech", modelId)) as TtsPipeline;
+      ttsPipelineRef.current = { modelId, pipeline: synthesizer };
+      return synthesizer;
+    })();
+    ttsPipelineLoadingRef.current = loadingTask;
+    try {
+      return await loadingTask;
+    } finally {
+      ttsPipelineLoadingRef.current = null;
+    }
+  };
+
+  const resetTtsAudioSource = (): void => {
+    const previousUrl = ttsAudioUrlRef.current;
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+      ttsAudioUrlRef.current = null;
+    }
+    const audio = ttsAudioRef.current;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.src = "";
+      ttsAudioRef.current = null;
+    }
+  };
+
+  const stopTtsPlayback = (): void => {
+    const audio = ttsAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    setTtsPlaying(false);
+    resetTtsAudioSource();
+  };
+
+  const playTtsText = async (text: string): Promise<void> => {
+    const clean = text.trim();
+    if (!clean || ttsGenerating) {
+      return;
+    }
+    setTtsError("");
+    stopTtsPlayback();
+    setTtsGenerating(true);
+    try {
+      const synthesizer = await ensureTtsPipeline(DEFAULT_TTS_MODEL_ID);
+      const output = await synthesizer(clean);
+      const objectUrl = URL.createObjectURL(output.toBlob());
+      ttsAudioUrlRef.current = objectUrl;
+      const audio = new Audio(objectUrl);
+      audio.onended = () => {
+        setTtsPlaying(false);
+        resetTtsAudioSource();
+      };
+      audio.onerror = () => {
+        setTtsPlaying(false);
+        setTtsError("音频播放失败，请重试");
+        resetTtsAudioSource();
+      };
+      ttsAudioRef.current = audio;
+      setTtsPlaying(true);
+      await audio.play();
+    } catch (error) {
+      setTtsPlaying(false);
+      resetTtsAudioSource();
+      setTtsError(error instanceof Error ? error.message : "语音合成失败");
+    } finally {
+      setTtsGenerating(false);
+    }
+  };
+
   const decodeAudioBlob = async (blob: Blob): Promise<Float32Array> => {
     const arrayBuffer = await blob.arrayBuffer();
     const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -1074,6 +1189,7 @@ function App() {
         mediaRecorderRef.current.stop();
       }
       stopMediaTracks();
+      stopTtsPlayback();
     };
   }, []);
 
@@ -1195,6 +1311,15 @@ function App() {
                     : recording
                       ? "录音中，点击麦克风按钮结束并开始识别..."
                       : `正在加载并运行语音识别模型（${asrModelLabel}）...`}
+                </Typography.Text>
+              )}
+              {(ttsGenerating || ttsPlaying || ttsError) && (
+                <Typography.Text type={ttsError ? "danger" : "secondary"}>
+                  {ttsError
+                    ? `语音朗读失败：${ttsError}`
+                    : ttsGenerating
+                      ? "正在生成朗读音频，请稍候..."
+                      : "正在朗读中，点击“停止朗读”可中断播放。"}
                 </Typography.Text>
               )}
             </Space>
