@@ -108,6 +108,17 @@ function findLatestToolSegmentIndex(
   return -1;
 }
 
+function findFallbackToolSegmentIndex(segments: ContentSegment[]): number {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment.type !== "tool") {
+      continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
 function upsertToolSegment(
   segments: ContentSegment[],
   payload: {
@@ -228,7 +239,10 @@ function appendToolOutput(
   if (!clean) {
     return;
   }
-  const idx = findLatestToolSegmentIndex(segments, payload.toolUseId, payload.toolName);
+  let idx = findLatestToolSegmentIndex(segments, payload.toolUseId, payload.toolName);
+  if (idx < 0) {
+    idx = findFallbackToolSegmentIndex(segments);
+  }
   if (idx >= 0) {
     const prev = segments[idx];
     if (prev.type !== "tool") {
