@@ -158,19 +158,34 @@ export function registerIpcHandlers(logger: Logger): void {
     if (!requestId) {
       return { error: "缺少 requestId" };
     }
+    const startedAt = Date.now();
+    logger.logInfo(`[tts:synthesize:stream:${requestId}] 收到请求，textLength=${String(payload?.text || "").length}`);
     const channel = `tts:stream:${requestId}`;
+    let chunkCount = 0;
     const pushEvent = (streamEvent: EdgeTtsStreamEvent): void => {
+      if (streamEvent.type === "chunk") {
+        chunkCount += 1;
+      } else {
+        logger.logInfo(
+          `[tts:synthesize:stream:${requestId}] 推送事件 type=${streamEvent.type}，chunkCount=${chunkCount}`
+        );
+      }
       if (!event.sender.isDestroyed()) {
         event.sender.send(channel, streamEvent);
       }
     };
 
     try {
-      await streamSynthesizeWithEdgeTts(payload, activeTtsSockets, pushEvent);
+      await streamSynthesizeWithEdgeTts(payload, activeTtsSockets, pushEvent, logger);
       pushEvent({ type: "done" });
+      logger.logInfo(`[tts:synthesize:stream:${requestId}] 完成，耗时=${Date.now() - startedAt}ms`);
       return { ok: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "语音合成失败";
+      logger.logError(
+        `[tts:synthesize:stream:${requestId}] 失败，耗时=${Date.now() - startedAt}ms，chunkCount=${chunkCount}`,
+        error
+      );
       if (errorMessage.includes("closed") || errorMessage.includes("中止") || errorMessage.includes("关闭")) {
         pushEvent({ type: "stopped" });
         return { ok: true, stopped: true };
@@ -187,8 +202,10 @@ export function registerIpcHandlers(logger: Logger): void {
     if (!requestId) {
       return { ok: false, error: "缺少 requestId" };
     }
+    logger.logInfo(`[tts:stop:${requestId}] 收到停止请求`);
     const active = activeTtsSockets.get(requestId);
     if (!active) {
+      logger.logInfo(`[tts:stop:${requestId}] 未找到活动请求`);
       return { ok: false, error: "未找到可停止的语音请求" };
     }
     try {
@@ -197,6 +214,7 @@ export function registerIpcHandlers(logger: Logger): void {
       // ignore close errors
     }
     activeTtsSockets.delete(requestId);
+    logger.logInfo(`[tts:stop:${requestId}] 已停止并清理`);
     return { ok: true };
   });
 }

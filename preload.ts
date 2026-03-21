@@ -149,12 +149,26 @@ contextBridge.exposeInMainWorld("smartTeach", {
     onEvent: (event: TtsStreamEvent) => void
   ) => {
     const channel = `tts:stream:${payload.requestId}`;
+    const streamTimeoutMs = 45000;
     const listener = (_event: unknown, streamEvent: TtsStreamEvent) => {
       onEvent(streamEvent);
     };
     ipcRenderer.on(channel, listener);
+    const invokePromise = ipcRenderer.invoke("tts:synthesize:stream", payload) as Promise<{
+      ok?: boolean;
+      stopped?: boolean;
+      error?: string;
+    }>;
+    invokePromise.catch(() => {
+      // handled by race/consumer
+    });
+    const timeoutPromise = new Promise<{ error: string }>((resolve) => {
+      setTimeout(() => {
+        resolve({ error: `语音流请求超时（${streamTimeoutMs}ms）` });
+      }, streamTimeoutMs);
+    });
     try {
-      return await ipcRenderer.invoke("tts:synthesize:stream", payload);
+      return await Promise.race([invokePromise, timeoutPromise]);
     } finally {
       ipcRenderer.removeListener(channel, listener);
     }

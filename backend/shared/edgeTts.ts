@@ -106,7 +106,11 @@ export async function synthesizeWithEdgeTts(payload?: EdgeTtsPayload): Promise<{
 export async function streamSynthesizeWithEdgeTts(
   payload: EdgeTtsPayload | undefined,
   activeSockets: Map<string, { close: () => void }>,
-  onEvent: (event: EdgeTtsStreamEvent) => void
+  onEvent: (event: EdgeTtsStreamEvent) => void,
+  logger?: {
+    logInfo: (message: string, extra?: unknown) => void;
+    logError: (message: string, error?: unknown) => void;
+  }
 ): Promise<void> {
   const text = String(payload?.text || "").trim();
   const requestId = String(payload?.requestId || "").trim();
@@ -129,11 +133,20 @@ export async function streamSynthesizeWithEdgeTts(
     timeout: 30000,
   });
 
-  const ws = await tts._connectWebSocket();
+  logger?.logInfo(`[tts:stream:${requestId}] 开始建立 Edge TTS WebSocket 连接`);
+  const ws = await Promise.race([
+    tts._connectWebSocket(),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Edge TTS 连接超时")), 15000);
+    }),
+  ]);
+  logger?.logInfo(`[tts:stream:${requestId}] Edge TTS WebSocket 连接成功`);
   activeSockets.set(requestId, { close: () => ws.close() });
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let chunkCount = 0;
+    let firstChunkLogged = false;
     const finalize = (cb: () => void): void => {
       if (settled) {
         return;
@@ -157,6 +170,7 @@ export async function streamSynthesizeWithEdgeTts(
     ws.on("message", (rawData: Buffer, isBinary: boolean) => {
       if (!isBinary) {
         if (rawData.toString().includes("Path:turn.end")) {
+          logger?.logInfo(`[tts:stream:${requestId}] 收到 turn.end，chunkCount=${chunkCount}`);
           clearTimeout(timeout);
           finalize(() => resolve());
         }
@@ -169,6 +183,11 @@ export async function streamSynthesizeWithEdgeTts(
       if (!chunk.length) {
         return;
       }
+      chunkCount += 1;
+      if (!firstChunkLogged) {
+        firstChunkLogged = true;
+        logger?.logInfo(`[tts:stream:${requestId}] 收到首个音频分片，bytes=${chunk.length}`);
+      }
       onEvent({
         type: "chunk",
         chunkBase64: chunk.toString("base64"),
@@ -177,11 +196,13 @@ export async function streamSynthesizeWithEdgeTts(
     });
 
     ws.on("error", (error: Error) => {
+      logger?.logError(`[tts:stream:${requestId}] WebSocket error`, error);
       clearTimeout(timeout);
       finalize(() => reject(error));
     });
 
     ws.on("close", () => {
+      logger?.logInfo(`[tts:stream:${requestId}] WebSocket close，settled=${settled}`);
       clearTimeout(timeout);
       if (!settled) {
         finalize(() => reject(new Error("语音连接已关闭")));
@@ -199,5 +220,6 @@ export async function streamSynthesizeWithEdgeTts(
           </voice>
         </speak>`
     );
+    logger?.logInfo(`[tts:stream:${requestId}] SSML 已发送，voice=${voiceOptions.voice}`);
   });
 }

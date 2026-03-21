@@ -127,6 +127,7 @@ export function useTts(): UseTtsResult {
 
     try {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      console.info(`[TTS][${requestId}] 开始朗读，textLength=${clean.length}`);
       ttsRequestIdRef.current = requestId;
       ttsChunkQueueRef.current = [];
       ttsStreamDoneRef.current = false;
@@ -186,6 +187,7 @@ export function useTts(): UseTtsResult {
       const synthesizeSpeechStream = window.smartTeach?.synthesizeSpeechStream;
       if (synthesizeSpeechStream) {
         let firstChunkReceived = false;
+        console.info(`[TTS][${requestId}] 使用流式合成`);
         const streamResult = await synthesizeSpeechStream(
           {
             text: clean,
@@ -199,18 +201,21 @@ export function useTts(): UseTtsResult {
             if (event.type === "chunk") {
               if (!firstChunkReceived) {
                 firstChunkReceived = true;
+                console.info(`[TTS][${requestId}] 收到首个音频分片`);
                 setTtsGenerating(false);
               }
               pushTtsChunk(decodeBase64ToUint8Array(event.chunkBase64));
               return;
             }
             if (event.type === "done" || event.type === "stopped") {
+              console.info(`[TTS][${requestId}] 流结束，type=${event.type}`);
               setTtsGenerating(false);
               ttsStreamDoneRef.current = true;
               pumpTtsQueue();
               return;
             }
             if (event.type === "error") {
+              console.error(`[TTS][${requestId}] 流错误: ${event.error || "语音流生成失败"}`);
               setTtsGenerating(false);
               setTtsError(event.error || "语音流生成失败");
               stopTtsPlayback();
@@ -218,8 +223,10 @@ export function useTts(): UseTtsResult {
           }
         );
         if (streamResult?.error) {
+          console.error(`[TTS][${requestId}] 流请求返回错误: ${streamResult.error}`);
           throw new Error(streamResult.error);
         }
+        console.info(`[TTS][${requestId}] 流式合成请求正常返回`);
         return;
       }
 
@@ -231,11 +238,13 @@ export function useTts(): UseTtsResult {
       if (!ttsResult.ok) {
         throw new Error(ttsResult.error || "语音合成失败");
       }
+      console.info(`[TTS][${requestId}] 使用非流式合成成功`);
       setTtsGenerating(false);
       pushTtsChunk(decodeBase64ToUint8Array(ttsResult.audioBase64));
       ttsStreamDoneRef.current = true;
       pumpTtsQueue();
     } catch (error) {
+      console.error("[TTS] 朗读失败", error);
       setTtsPlaying(false);
       ttsRequestIdRef.current = null;
       resetTtsAudioSource();
