@@ -102,6 +102,34 @@ declare global {
             error: string;
           }
       >;
+      synthesizeSpeechStream?: (
+        payload: {
+          text: string;
+          requestId: string;
+          voice?: string;
+          rate?: string;
+          pitch?: string;
+          volume?: string;
+        },
+        onEvent: (event:
+          | {
+              type: "chunk";
+              chunkBase64: string;
+              mimeType: "audio/mpeg";
+            }
+          | {
+              type: "done";
+            }
+          | {
+              type: "stopped";
+            }
+          | {
+              type: "error";
+              error: string;
+            }
+        ) => void
+      ) => Promise<{ ok?: boolean; stopped?: boolean; error?: string }>;
+      stopSpeech?: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
     };
   }
 }

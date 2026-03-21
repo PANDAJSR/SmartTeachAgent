@@ -260,6 +260,11 @@ function App() {
   const asrPipelineLoadingRef = useRef<Promise<AsrPipeline> | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioUrlRef = useRef<string | null>(null);
+  const ttsMediaSourceRef = useRef<MediaSource | null>(null);
+  const ttsSourceBufferRef = useRef<SourceBuffer | null>(null);
+  const ttsChunkQueueRef = useRef<Uint8Array[]>([]);
+  const ttsStreamDoneRef = useRef<boolean>(false);
+  const ttsRequestIdRef = useRef<string | null>(null);
   const zhSimplifierRef = useRef<ChineseConverter | null>(null);
   const zhSimplifierLoadingRef = useRef<Promise<ChineseConverter> | null>(null);
 
@@ -937,16 +942,71 @@ function App() {
     }
   };
 
-  const createObjectUrlFromBase64 = (audioBase64: string, mimeType: string): string => {
-    const binary = window.atob(audioBase64);
+  const decodeBase64ToUint8Array = (encoded: string): Uint8Array => {
+    const binary = window.atob(encoded);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) {
       bytes[index] = binary.charCodeAt(index);
     }
-    return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    return bytes;
+  };
+
+  const tryFinalizeTtsStream = (): void => {
+    const mediaSource = ttsMediaSourceRef.current;
+    const sourceBuffer = ttsSourceBufferRef.current;
+    if (!mediaSource || !sourceBuffer) {
+      return;
+    }
+    if (!ttsStreamDoneRef.current) {
+      return;
+    }
+    if (ttsChunkQueueRef.current.length > 0 || sourceBuffer.updating) {
+      return;
+    }
+    if (mediaSource.readyState === "open") {
+      try {
+        mediaSource.endOfStream();
+      } catch {
+        // ignore end-of-stream errors
+      }
+    }
+  };
+
+  const pumpTtsQueue = (): void => {
+    const sourceBuffer = ttsSourceBufferRef.current;
+    if (!sourceBuffer || sourceBuffer.updating) {
+      return;
+    }
+    const nextChunk = ttsChunkQueueRef.current.shift();
+    if (!nextChunk) {
+      tryFinalizeTtsStream();
+      return;
+    }
+    try {
+      const chunkBuffer =
+        nextChunk.buffer instanceof ArrayBuffer
+          ? nextChunk.buffer.slice(nextChunk.byteOffset, nextChunk.byteOffset + nextChunk.byteLength)
+          : nextChunk.slice().buffer;
+      sourceBuffer.appendBuffer(chunkBuffer);
+    } catch (error) {
+      setTtsError(error instanceof Error ? error.message : "音频分片写入失败");
+      stopTtsPlayback();
+    }
+  };
+
+  const pushTtsChunk = (chunk: Uint8Array): void => {
+    if (!chunk.length) {
+      return;
+    }
+    ttsChunkQueueRef.current.push(chunk);
+    pumpTtsQueue();
   };
 
   const resetTtsAudioSource = (): void => {
+    ttsStreamDoneRef.current = true;
+    ttsChunkQueueRef.current = [];
+    ttsSourceBufferRef.current = null;
+    ttsMediaSourceRef.current = null;
     const previousUrl = ttsAudioUrlRef.current;
     if (previousUrl) {
       URL.revokeObjectURL(previousUrl);
@@ -962,6 +1022,11 @@ function App() {
   };
 
   const stopTtsPlayback = (): void => {
+    const requestId = ttsRequestIdRef.current;
+    if (requestId && window.smartTeach?.stopSpeech) {
+      void window.smartTeach.stopSpeech(requestId);
+    }
+    ttsRequestIdRef.current = null;
     const audio = ttsAudioRef.current;
     if (audio) {
       audio.pause();
@@ -980,6 +1045,94 @@ function App() {
     stopTtsPlayback();
     setTtsGenerating(true);
     try {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      ttsRequestIdRef.current = requestId;
+      ttsChunkQueueRef.current = [];
+      ttsStreamDoneRef.current = false;
+
+      const mediaSource = new MediaSource();
+      ttsMediaSourceRef.current = mediaSource;
+      const objectUrl = URL.createObjectURL(mediaSource);
+      ttsAudioUrlRef.current = objectUrl;
+      const audio = new Audio(objectUrl);
+      ttsAudioRef.current = audio;
+
+      await new Promise<void>((resolve, reject) => {
+        mediaSource.addEventListener(
+          "sourceopen",
+          () => {
+            try {
+              const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+              sourceBuffer.mode = "sequence";
+              sourceBuffer.addEventListener("updateend", () => {
+                pumpTtsQueue();
+              });
+              sourceBuffer.addEventListener("error", () => {
+                setTtsError("音频流缓冲失败");
+                stopTtsPlayback();
+              });
+              ttsSourceBufferRef.current = sourceBuffer;
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          },
+          { once: true }
+        );
+      });
+
+      audio.onended = () => {
+        setTtsPlaying(false);
+        ttsRequestIdRef.current = null;
+        resetTtsAudioSource();
+      };
+      audio.onerror = () => {
+        setTtsPlaying(false);
+        ttsRequestIdRef.current = null;
+        setTtsError("音频播放失败，请重试");
+        resetTtsAudioSource();
+      };
+      setTtsPlaying(true);
+      await audio.play();
+
+      const synthesizeSpeechStream = window.smartTeach?.synthesizeSpeechStream;
+      if (synthesizeSpeechStream) {
+        const streamResult = await synthesizeSpeechStream(
+          {
+            text: clean,
+            requestId,
+            voice: DEFAULT_EDGE_TTS_VOICE,
+          },
+          (event) => {
+            if (ttsRequestIdRef.current !== requestId) {
+              return;
+            }
+            if (event.type === "chunk") {
+              pushTtsChunk(decodeBase64ToUint8Array(event.chunkBase64));
+              return;
+            }
+            if (event.type === "done") {
+              ttsStreamDoneRef.current = true;
+              pumpTtsQueue();
+              return;
+            }
+            if (event.type === "stopped") {
+              ttsStreamDoneRef.current = true;
+              pumpTtsQueue();
+              return;
+            }
+            if (event.type === "error") {
+              setTtsError(event.error || "语音流生成失败");
+              stopTtsPlayback();
+            }
+          }
+        );
+        if (streamResult?.error) {
+          throw new Error(streamResult.error);
+        }
+        return;
+      }
+
       const synthesizeSpeech = window.smartTeach?.synthesizeSpeech;
       if (!synthesizeSpeech) {
         throw new Error("当前模式不支持 Edge TTS，请在 Electron 客户端中使用。");
@@ -991,23 +1144,12 @@ function App() {
       if (!ttsResult.ok) {
         throw new Error(ttsResult.error || "语音合成失败");
       }
-      const objectUrl = createObjectUrlFromBase64(ttsResult.audioBase64, ttsResult.mimeType);
-      ttsAudioUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
-      audio.onended = () => {
-        setTtsPlaying(false);
-        resetTtsAudioSource();
-      };
-      audio.onerror = () => {
-        setTtsPlaying(false);
-        setTtsError("音频播放失败，请重试");
-        resetTtsAudioSource();
-      };
-      ttsAudioRef.current = audio;
-      setTtsPlaying(true);
-      await audio.play();
+      pushTtsChunk(decodeBase64ToUint8Array(ttsResult.audioBase64));
+      ttsStreamDoneRef.current = true;
+      pumpTtsQueue();
     } catch (error) {
       setTtsPlaying(false);
+      ttsRequestIdRef.current = null;
       resetTtsAudioSource();
       setTtsError(error instanceof Error ? error.message : "语音合成失败");
     } finally {

@@ -29,6 +29,23 @@ type StreamEvent = {
   error: string;
 };
 
+type TtsStreamEvent =
+  | {
+      type: "chunk";
+      chunkBase64: string;
+      mimeType: "audio/mpeg";
+    }
+  | {
+      type: "done";
+    }
+  | {
+      type: "stopped";
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
 type ChatHistoryTurn = {
   role: "user" | "assistant";
   content: string;
@@ -119,5 +136,30 @@ contextBridge.exposeInMainWorld("smartTeach", {
           error: string;
         }
     >;
+  },
+  synthesizeSpeechStream: async (
+    payload: {
+      text: string;
+      requestId: string;
+      voice?: string;
+      rate?: string;
+      pitch?: string;
+      volume?: string;
+    },
+    onEvent: (event: TtsStreamEvent) => void
+  ) => {
+    const channel = `tts:stream:${payload.requestId}`;
+    const listener = (_event: unknown, streamEvent: TtsStreamEvent) => {
+      onEvent(streamEvent);
+    };
+    ipcRenderer.on(channel, listener);
+    try {
+      return await ipcRenderer.invoke("tts:synthesize:stream", payload);
+    } finally {
+      ipcRenderer.removeListener(channel, listener);
+    }
+  },
+  stopSpeech: async (requestId: string) => {
+    return ipcRenderer.invoke("tts:stop", { requestId }) as Promise<{ ok: boolean; error?: string }>;
   },
 });

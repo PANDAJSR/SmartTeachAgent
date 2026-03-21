@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import { randomBytes } from "node:crypto";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -57,12 +58,30 @@ type ChatHistoryTurn = {
 };
 
 type EdgeTtsPayload = {
+  requestId?: string;
   text?: string;
   voice?: string;
   rate?: string;
   pitch?: string;
   volume?: string;
 };
+
+type EdgeTtsStreamEvent =
+  | {
+      type: "chunk";
+      chunkBase64: string;
+      mimeType: "audio/mpeg";
+    }
+  | {
+      type: "done";
+    }
+  | {
+      type: "stopped";
+    }
+  | {
+      type: "error";
+      error: string;
+    };
 
 type AppConfig = {
   mcp: {
@@ -78,6 +97,7 @@ type AppConfig = {
 const MAX_HISTORY_TURNS = 24;
 
 const activeAbortControllers = new Map<string, AbortController>();
+const activeTtsSockets = new Map<string, { close: () => void }>();
 const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
 const configFilePath = path.join(os.homedir(), "SmartTeachAgent", "config.json");
 const LOG_PREFIX = "[SmartTeachAgent][main]";
@@ -204,6 +224,129 @@ async function synthesizeWithEdgeTts(payload?: EdgeTtsPayload): Promise<{
       // ignore cleanup errors
     }
   }
+}
+
+function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[<>&"']/g, (char) => {
+    switch (char) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case '"':
+        return "&quot;";
+      case "'":
+        return "&apos;";
+      default:
+        return char;
+    }
+  });
+}
+
+async function streamSynthesizeWithEdgeTts(
+  payload: EdgeTtsPayload | undefined,
+  onEvent: (event: EdgeTtsStreamEvent) => void
+): Promise<void> {
+  const text = String(payload?.text || "").trim();
+  if (!text) {
+    throw new Error("text 不能为空");
+  }
+  const requestId = String(payload?.requestId || "").trim();
+  if (!requestId) {
+    throw new Error("requestId 不能为空");
+  }
+  const voice = String(payload?.voice || process.env.EDGE_TTS_VOICE || "zh-CN-XiaoxiaoNeural").trim();
+  const rate = String(payload?.rate || process.env.EDGE_TTS_RATE || "default").trim();
+  const pitch = String(payload?.pitch || process.env.EDGE_TTS_PITCH || "default").trim();
+  const volume = String(payload?.volume || process.env.EDGE_TTS_VOLUME || "default").trim();
+
+  const { EdgeTTS } = await import("node-edge-tts");
+  const tts = new EdgeTTS({
+    voice,
+    lang: "zh-CN",
+    outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+    rate,
+    pitch,
+    volume,
+    timeout: 30000,
+  });
+  const ws = await tts._connectWebSocket();
+  activeTtsSockets.set(requestId, { close: () => ws.close() });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finalize = (callback: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeTtsSockets.delete(requestId);
+      callback();
+    };
+
+    const timeout = setTimeout(() => {
+      finalize(() => {
+        try {
+          ws.close();
+        } catch {
+          // ignore close errors
+        }
+        reject(new Error("语音生成超时"));
+      });
+    }, 30000);
+
+    ws.on("message", (rawData: Buffer, isBinary: boolean) => {
+      if (!isBinary) {
+        const textData = rawData.toString();
+        if (textData.includes("Path:turn.end")) {
+          clearTimeout(timeout);
+          finalize(() => resolve());
+        }
+        return;
+      }
+
+      const separator = Buffer.from("Path:audio\r\n");
+      const separatorIndex = rawData.indexOf(separator);
+      const chunk =
+        separatorIndex >= 0
+          ? rawData.subarray(separatorIndex + separator.length)
+          : rawData;
+      if (chunk.length === 0) {
+        return;
+      }
+      onEvent({
+        type: "chunk",
+        chunkBase64: chunk.toString("base64"),
+        mimeType: "audio/mpeg",
+      });
+    });
+
+    ws.on("error", (error: Error) => {
+      clearTimeout(timeout);
+      finalize(() => reject(error));
+    });
+
+    ws.on("close", () => {
+      clearTimeout(timeout);
+      if (!settled) {
+        finalize(() => reject(new Error("语音连接已关闭")));
+      }
+    });
+
+    const wsRequestId = randomBytes(16).toString("hex");
+    ws.send(
+      `X-RequestId:${wsRequestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n` +
+        `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="zh-CN">
+          <voice name="${voice}">
+            <prosody rate="${rate}" pitch="${pitch}" volume="${volume}">
+              ${escapeXml(text)}
+            </prosody>
+          </voice>
+        </speak>`
+    );
+  });
 }
 
 function buildMcpServers(config: AppConfig): Record<string, { type: "http"; url: string; headers?: Record<string, string> }> {
@@ -1070,6 +1213,56 @@ ipcMain.handle("tts:synthesize", async (_event, payload?: EdgeTtsPayload) => {
       error: error instanceof Error ? error.message : "语音合成失败",
     };
   }
+});
+
+ipcMain.handle("tts:synthesize:stream", async (event, payload?: EdgeTtsPayload) => {
+  const requestId = String(payload?.requestId || "").trim();
+  if (!requestId) {
+    return { error: "缺少 requestId" };
+  }
+  const channel = `tts:stream:${requestId}`;
+  const pushEvent = (streamEvent: EdgeTtsStreamEvent): void => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send(channel, streamEvent);
+    }
+  };
+
+  logInfo(`[tts:synthesize:stream] 收到请求 requestId=${requestId} textLength=${String(payload?.text || "").trim().length}`);
+  try {
+    await streamSynthesizeWithEdgeTts(payload, pushEvent);
+    pushEvent({ type: "done" });
+    logInfo(`[tts:synthesize:stream] 生成完成 requestId=${requestId}`);
+    return { ok: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "语音合成失败";
+    if (errorMessage.includes("closed") || errorMessage.includes("中止") || errorMessage.includes("关闭")) {
+      pushEvent({ type: "stopped" });
+      return { ok: true, stopped: true };
+    }
+    pushEvent({ type: "error", error: errorMessage });
+    logError(`[tts:synthesize:stream] 生成失败 requestId=${requestId}`, error);
+    return { error: errorMessage };
+  } finally {
+    activeTtsSockets.delete(requestId);
+  }
+});
+
+ipcMain.handle("tts:stop", async (_event, payload?: { requestId?: string }) => {
+  const requestId = String(payload?.requestId || "").trim();
+  if (!requestId) {
+    return { ok: false, error: "缺少 requestId" };
+  }
+  const active = activeTtsSockets.get(requestId);
+  if (!active) {
+    return { ok: false, error: "未找到可停止的语音请求" };
+  }
+  try {
+    active.close();
+  } catch {
+    // ignore close errors
+  }
+  activeTtsSockets.delete(requestId);
+  return { ok: true };
 });
 
 function createWindow(): void {
