@@ -67,6 +67,7 @@ function SettingsModal(props: SettingsModalProps) {
       title="设置"
       open={open}
       className="settings-modal"
+      wrapClassName="settings-modal-wrap"
       width="100vw"
       style={{ top: 0, margin: 0, paddingBottom: 0 }}
       onCancel={onClose}
