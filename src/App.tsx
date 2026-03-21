@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bubble, Conversations, Sender, Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
-import Editor from "@monaco-editor/react";
-import { Button, Card, Modal, Space, Typography } from "antd";
+import { Button, Card, Space, Typography } from "antd";
+import SettingsModal from "./components/SettingsModal";
 
 type Role = "user" | "ai";
 
@@ -70,6 +70,17 @@ type Conversation = {
 type ChatHistoryTurn = {
   role: "user" | "assistant";
   content: string;
+};
+
+type AppConfig = {
+  mcp?: {
+    macHttpServer?: {
+      enabled?: boolean;
+      name?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    };
+  };
 };
 
 const MAX_HISTORY_TURNS = 24;
@@ -167,13 +178,22 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string>(initialConversation.id);
   const activeRequestIdRef = useRef<string | null>(null);
   const [collapsedToolKeys, setCollapsedToolKeys] = useState<string[]>([]);
-  const [envEditorOpen, setEnvEditorOpen] = useState<boolean>(false);
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [settingsLoading, setSettingsLoading] = useState<boolean>(false);
   const [envEditorLoading, setEnvEditorLoading] = useState<boolean>(false);
   const [envEditorSaving, setEnvEditorSaving] = useState<boolean>(false);
   const [envEditorError, setEnvEditorError] = useState<string>("");
   const [envEditorNotice, setEnvEditorNotice] = useState<string>("");
   const [envFilePath, setEnvFilePath] = useState<string>("~/SmartTeachAgent/.env");
   const [envFileContent, setEnvFileContent] = useState<string>("");
+  const [configPath, setConfigPath] = useState<string>("~/SmartTeachAgent/config.json");
+  const [configSaving, setConfigSaving] = useState<boolean>(false);
+  const [configError, setConfigError] = useState<string>("");
+  const [configNotice, setConfigNotice] = useState<string>("");
+  const [mcpEnabled, setMcpEnabled] = useState<boolean>(false);
+  const [mcpServerName, setMcpServerName] = useState<string>("mac-http");
+  const [mcpServerUrl, setMcpServerUrl] = useState<string>("");
+  const [mcpHeadersText, setMcpHeadersText] = useState<string>("");
 
   const roles = useMemo(
     () =>
@@ -489,12 +509,9 @@ function App() {
     }
   };
 
-  const openEnvEditor = async (): Promise<void> => {
-    console.info(`${UI_LOG_PREFIX} openEnvEditor start`);
-    setEnvEditorOpen(true);
+  const loadEnvFile = async (): Promise<void> => {
     setEnvEditorLoading(true);
     setEnvEditorError("");
-    setEnvEditorNotice("");
     try {
       const readEnvFile = window.smartTeach?.readEnvFile;
       const getEnvFilePath = window.smartTeach?.getEnvFilePath;
@@ -508,14 +525,52 @@ function App() {
       const data = await readEnvFile();
       setEnvFilePath(data.path);
       setEnvFileContent(data.content);
-      console.info(`${UI_LOG_PREFIX} openEnvEditor success path=${data.path} length=${data.content.length}`);
+      console.info(`${UI_LOG_PREFIX} loadEnvFile success path=${data.path} length=${data.content.length}`);
     } catch (error) {
-      console.error(`${UI_LOG_PREFIX} openEnvEditor failed`, error);
+      console.error(`${UI_LOG_PREFIX} loadEnvFile failed`, error);
       setEnvEditorError(error instanceof Error ? error.message : "读取 .env 文件失败");
       setEnvFileContent("");
     } finally {
       setEnvEditorLoading(false);
     }
+  };
+
+  const loadConfigFile = async (): Promise<void> => {
+    setConfigError("");
+    try {
+      const readConfigFile = window.smartTeach?.readConfigFile;
+      if (!readConfigFile) {
+        setConfigPath("~/SmartTeachAgent/config.json");
+        setConfigError("当前模式不支持读取配置，请在 Electron 客户端中使用此功能。");
+        return;
+      }
+      const data = await readConfigFile();
+      setConfigPath(data.path);
+      const config = data.config || {};
+      const server = config.mcp?.macHttpServer || {};
+      setMcpEnabled(Boolean(server.enabled));
+      setMcpServerName((server.name || "mac-http").trim() || "mac-http");
+      setMcpServerUrl((server.url || "").trim());
+      setMcpHeadersText(
+        server.headers && Object.keys(server.headers).length > 0
+          ? JSON.stringify(server.headers, null, 2)
+          : ""
+      );
+      console.info(`${UI_LOG_PREFIX} loadConfigFile success path=${data.path}`);
+    } catch (error) {
+      console.error(`${UI_LOG_PREFIX} loadConfigFile failed`, error);
+      setConfigError(error instanceof Error ? error.message : "读取 config.json 失败");
+    }
+  };
+
+  const openSettings = async (): Promise<void> => {
+    console.info(`${UI_LOG_PREFIX} openSettings start`);
+    setSettingsOpen(true);
+    setSettingsLoading(true);
+    setEnvEditorNotice("");
+    setConfigNotice("");
+    await Promise.all([loadEnvFile(), loadConfigFile()]);
+    setSettingsLoading(false);
   };
 
   const saveEnvFile = async (): Promise<void> => {
@@ -538,6 +593,55 @@ function App() {
       setEnvEditorError(error instanceof Error ? error.message : "保存 .env 文件失败");
     } finally {
       setEnvEditorSaving(false);
+    }
+  };
+
+  const saveConfigFile = async (): Promise<void> => {
+    console.info(`${UI_LOG_PREFIX} saveConfigFile start`);
+    const writeConfigFile = window.smartTeach?.writeConfigFile;
+    if (!writeConfigFile) {
+      setConfigError("当前模式不支持直接保存，请在 Electron 客户端中使用此功能。");
+      return;
+    }
+
+    let headers: Record<string, string> | undefined;
+    const cleanHeadersText = mcpHeadersText.trim();
+    if (cleanHeadersText) {
+      try {
+        const parsed = JSON.parse(cleanHeadersText) as Record<string, unknown>;
+        headers = Object.fromEntries(
+          Object.entries(parsed).map(([key, value]) => [key, String(value)])
+        );
+      } catch {
+        setConfigError("请求头 JSON 格式错误，请检查后重试。");
+        return;
+      }
+    }
+
+    const nextConfig: AppConfig = {
+      mcp: {
+        macHttpServer: {
+          enabled: mcpEnabled,
+          name: mcpServerName.trim() || "mac-http",
+          url: mcpServerUrl.trim(),
+          headers,
+        },
+      },
+    };
+
+    setConfigSaving(true);
+    setConfigError("");
+    setConfigNotice("");
+    try {
+      const result = await writeConfigFile(nextConfig);
+      setConfigPath(result.path);
+      setConfigNotice(`保存成功：${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
+      console.info(`${UI_LOG_PREFIX} saveConfigFile success path=${result.path}`);
+    } catch (error) {
+      console.error(`${UI_LOG_PREFIX} saveConfigFile failed`, error);
+      setConfigError(error instanceof Error ? error.message : "保存 config.json 失败");
+    } finally {
+      setConfigSaving(false);
     }
   };
 
@@ -571,9 +675,14 @@ function App() {
                   <Typography.Title level={3} style={{ margin: 0 }}>
                     智教助手
                   </Typography.Title>
-                  <Button onClick={() => void openEnvEditor()} disabled={loading}>
-                    编辑 .env
-                  </Button>
+                  <Button
+                    type="text"
+                    aria-label="打开设置"
+                    title="设置"
+                    onClick={() => void openSettings()}
+                    disabled={loading}
+                    icon={<i className="fa-solid fa-gear" aria-hidden="true" />}
+                  />
                 </div>
                 <Typography.Text type="secondary">
                   前端：Ant Design X ｜ 后端：Claude Agent SDK
@@ -603,47 +712,32 @@ function App() {
           </section>
         </div>
       </Card>
-      <Modal
-        title="编辑环境变量 .env"
-        open={envEditorOpen}
-        width={960}
-        onCancel={() => setEnvEditorOpen(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setEnvEditorOpen(false)}>
-            关闭
-          </Button>,
-          <Button
-            key="save"
-            type="primary"
-            loading={envEditorSaving}
-            onClick={() => void saveEnvFile()}
-            disabled={envEditorLoading}
-          >
-            保存
-          </Button>,
-        ]}
-      >
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
-          <Typography.Text type="secondary">{envFilePath}</Typography.Text>
-          {envEditorError ? <Typography.Text type="danger">{envEditorError}</Typography.Text> : null}
-          {envEditorNotice ? <Typography.Text type="success">{envEditorNotice}</Typography.Text> : null}
-          <Editor
-            height="55vh"
-            defaultLanguage="ini"
-            value={envFileContent}
-            loading="正在加载 .env 文件..."
-            options={{
-              minimap: { enabled: false },
-              fontSize: 14,
-              wordWrap: "on",
-              automaticLayout: true,
-              lineNumbers: "on",
-              scrollBeyondLastLine: false,
-            }}
-            onChange={(value) => setEnvFileContent(value || "")}
-          />
-        </Space>
-      </Modal>
+      <SettingsModal
+        open={settingsOpen}
+        loading={settingsLoading}
+        envEditorLoading={envEditorLoading}
+        envEditorSaving={envEditorSaving}
+        envEditorError={envEditorError}
+        envEditorNotice={envEditorNotice}
+        envFilePath={envFilePath}
+        envFileContent={envFileContent}
+        onClose={() => setSettingsOpen(false)}
+        onSaveEnv={saveEnvFile}
+        onChangeEnvContent={setEnvFileContent}
+        configPath={configPath}
+        configSaving={configSaving}
+        configError={configError}
+        configNotice={configNotice}
+        mcpEnabled={mcpEnabled}
+        mcpServerName={mcpServerName}
+        mcpServerUrl={mcpServerUrl}
+        mcpHeadersText={mcpHeadersText}
+        onChangeMcpEnabled={setMcpEnabled}
+        onChangeMcpServerName={setMcpServerName}
+        onChangeMcpServerUrl={setMcpServerUrl}
+        onChangeMcpHeadersText={setMcpHeadersText}
+        onSaveConfig={saveConfigFile}
+      />
     </main>
   );
 }

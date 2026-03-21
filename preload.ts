@@ -34,6 +34,17 @@ type ChatHistoryTurn = {
   content: string;
 };
 
+type AppConfig = {
+  mcp?: {
+    macHttpServer?: {
+      enabled?: boolean;
+      name?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    };
+  };
+};
+
 contextBridge.exposeInMainWorld("smartTeach", {
   chat: async (message: string, history?: ChatHistoryTurn[]) => {
     return ipcRenderer.invoke("chat:send", { message, history });
@@ -67,5 +78,14 @@ contextBridge.exposeInMainWorld("smartTeach", {
   },
   writeEnvFile: async (content: string) => {
     return ipcRenderer.invoke("env-file:write", { content }) as Promise<{ ok: boolean; path: string }>;
+  },
+  getConfigFilePath: async () => {
+    return ipcRenderer.invoke("config-file:get-path") as Promise<string>;
+  },
+  readConfigFile: async () => {
+    return ipcRenderer.invoke("config-file:read") as Promise<{ path: string; config: AppConfig }>;
+  },
+  writeConfigFile: async (config: AppConfig) => {
+    return ipcRenderer.invoke("config-file:write", { config }) as Promise<{ ok: boolean; path: string }>;
   },
 });

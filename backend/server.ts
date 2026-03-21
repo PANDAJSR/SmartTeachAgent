@@ -8,7 +8,19 @@ import { buildClaudeOptions } from "./claudeOptions";
 
 const app = express();
 const envFilePath = path.join(os.homedir(), "SmartTeachAgent", ".env");
+const configFilePath = path.join(os.homedir(), "SmartTeachAgent", "config.json");
 const LOG_PREFIX = "[SmartTeachAgent][server]";
+
+type AppConfig = {
+  mcp: {
+    macHttpServer: {
+      enabled: boolean;
+      name: string;
+      url: string;
+      headers: Record<string, string>;
+    };
+  };
+};
 
 function logInfo(message: string, extra?: unknown): void {
   if (typeof extra === "undefined") {
@@ -46,7 +58,75 @@ function sanitizeClaudeOptions(options: ReturnType<typeof buildClaudeOptions>): 
         : "unknown",
     allowedToolsCount: Array.isArray(options.allowedTools) ? options.allowedTools.length : 0,
     disallowedToolsCount: Array.isArray(options.disallowedTools) ? options.disallowedTools.length : 0,
+    mcpServersCount:
+      options.mcpServers && typeof options.mcpServers === "object"
+        ? Object.keys(options.mcpServers).length
+        : 0,
   };
+}
+
+function createDefaultConfig(): AppConfig {
+  return {
+    mcp: {
+      macHttpServer: {
+        enabled: false,
+        name: "mac-http",
+        url: "",
+        headers: {},
+      },
+    },
+  };
+}
+
+function normalizeAppConfig(raw: unknown): AppConfig {
+  const defaultConfig = createDefaultConfig();
+  if (!raw || typeof raw !== "object") {
+    return defaultConfig;
+  }
+
+  const rawMcp = (raw as { mcp?: unknown }).mcp;
+  if (!rawMcp || typeof rawMcp !== "object") {
+    return defaultConfig;
+  }
+  const rawServer = (rawMcp as { macHttpServer?: unknown }).macHttpServer;
+  if (!rawServer || typeof rawServer !== "object") {
+    return defaultConfig;
+  }
+
+  const enabled = Boolean((rawServer as { enabled?: unknown }).enabled);
+  const name = String((rawServer as { name?: unknown }).name || "mac-http").trim() || "mac-http";
+  const url = String((rawServer as { url?: unknown }).url || "").trim();
+  const rawHeaders = (rawServer as { headers?: unknown }).headers;
+  const headers =
+    rawHeaders && typeof rawHeaders === "object"
+      ? Object.fromEntries(
+          Object.entries(rawHeaders as Record<string, unknown>).map(([key, value]) => [key, String(value)])
+        )
+      : {};
+
+  return {
+    mcp: {
+      macHttpServer: {
+        enabled,
+        name,
+        url,
+        headers,
+      },
+    },
+  };
+}
+
+async function readAppConfig(): Promise<AppConfig> {
+  try {
+    const fs = await import("node:fs/promises");
+    const raw = await fs.readFile(configFilePath, "utf-8");
+    return normalizeAppConfig(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return createDefaultConfig();
+    }
+    throw error;
+  }
 }
 
 const envLoadResult = dotenv.config({ path: envFilePath, override: true });
@@ -388,6 +468,17 @@ app.post(
 
       const options = buildClaudeOptions();
       options.includePartialMessages = true;
+      const appConfig = await readAppConfig();
+      const mcpServer = appConfig.mcp.macHttpServer;
+      if (mcpServer.enabled && mcpServer.url) {
+        options.mcpServers = {
+          [mcpServer.name]: {
+            type: "http",
+            url: mcpServer.url,
+            headers: Object.keys(mcpServer.headers).length > 0 ? mcpServer.headers : undefined,
+          },
+        };
+      }
       logInfo(`[${requestId}] Claude options`, sanitizeClaudeOptions(options));
       logInfo(`[${requestId}] 请求上下文历史条数=${historyCount}`);
 

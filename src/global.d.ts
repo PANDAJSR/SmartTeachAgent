@@ -46,6 +46,17 @@ type ChatHistoryTurn = {
   content: string;
 };
 
+type AppConfig = {
+  mcp?: {
+    macHttpServer?: {
+      enabled?: boolean;
+      name?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    };
+  };
+};
+
 declare global {
   interface Window {
     smartTeach?: {
@@ -60,6 +71,9 @@ declare global {
       getEnvFilePath?: () => Promise<string>;
       readEnvFile?: () => Promise<{ path: string; content: string }>;
       writeEnvFile?: (content: string) => Promise<{ ok: boolean; path: string }>;
+      getConfigFilePath?: () => Promise<string>;
+      readConfigFile?: () => Promise<{ path: string; config: AppConfig }>;
+      writeConfigFile?: (config: AppConfig) => Promise<{ ok: boolean; path: string }>;
     };
   }
 }

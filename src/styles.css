@@ -88,6 +88,24 @@ body {
   font-size: 14px;
 }
 
+.settings-modal .ant-modal {
+  max-width: 100vw;
+  margin: 0;
+  padding-bottom: 0;
+}
+
+.settings-modal .ant-modal-content {
+  height: 100vh;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-modal .ant-modal-body {
+  flex: 1;
+  overflow: auto;
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 12px;
