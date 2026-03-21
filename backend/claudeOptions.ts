@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DEFAULT_MAX_TURNS = 4;
+const DEFAULT_MAX_TURNS = 100;
 const DEFAULT_CLAUDE_WORKSPACE = join(homedir(), ".SmartTeachAgent", "workspace");
 
 function parseCsvEnv(value?: string): string[] | undefined {
